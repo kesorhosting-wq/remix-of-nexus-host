@@ -16,11 +16,10 @@ interface BakongStatus {
 }
 
 interface BakongSettings {
-  merchantId: string;
+  accountId: string;  // Format: username@bankcode (e.g., yourname@aclb)
   merchantName: string;
   merchantCity: string;
   currency: string;
-  accountNumber: string;
 }
 
 const BakongConfig = () => {
@@ -31,11 +30,10 @@ const BakongConfig = () => {
   const [showApiKey, setShowApiKey] = useState(false);
   
   const [settings, setSettings] = useState<BakongSettings>({
-    merchantId: "",
+    accountId: "",
     merchantName: "GameHost",
     merchantCity: "Phnom Penh",
     currency: "USD",
-    accountNumber: "",
   });
 
   useEffect(() => {
@@ -52,11 +50,10 @@ const BakongConfig = () => {
     if (data?.config) {
       const config = data.config as any;
       setSettings({
-        merchantId: config.merchantId || "",
+        accountId: config.accountId || config.merchantId || "",
         merchantName: config.merchantName || "GameHost",
         merchantCity: config.merchantCity || "Phnom Penh",
         currency: config.currency || "USD",
-        accountNumber: config.accountNumber || "",
       });
     }
   };
@@ -97,14 +94,22 @@ const BakongConfig = () => {
   };
 
   const saveSettings = async () => {
+    if (!settings.accountId.includes("@")) {
+      toast({ 
+        title: "Invalid Account ID", 
+        description: "Account ID must be in format: username@bankcode (e.g., yourname@aclb)",
+        variant: "destructive" 
+      });
+      return;
+    }
+    
     setSaving(true);
     try {
       const configJson = {
-        merchantId: settings.merchantId,
+        accountId: settings.accountId,
         merchantName: settings.merchantName,
         merchantCity: settings.merchantCity,
         currency: settings.currency,
-        accountNumber: settings.accountNumber,
       };
 
       // Check if gateway exists
@@ -183,25 +188,18 @@ const BakongConfig = () => {
 
           <TabsContent value="settings" className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="merchantId">Bakong Merchant ID</Label>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="accountId">Bakong Account ID *</Label>
                 <Input
-                  id="merchantId"
-                  placeholder="your_merchant_id@wing"
-                  value={settings.merchantId}
-                  onChange={(e) => setSettings({ ...settings, merchantId: e.target.value })}
+                  id="accountId"
+                  placeholder="yourname@aclb"
+                  value={settings.accountId}
+                  onChange={(e) => setSettings({ ...settings, accountId: e.target.value })}
                 />
-                <p className="text-xs text-muted-foreground">Your Bakong account ID</p>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="accountNumber">Account Number (Optional)</Label>
-                <Input
-                  id="accountNumber"
-                  placeholder="Enter account number"
-                  value={settings.accountNumber}
-                  onChange={(e) => setSettings({ ...settings, accountNumber: e.target.value })}
-                />
+                <p className="text-xs text-muted-foreground">
+                  Format: <code className="bg-muted px-1 rounded">username@bankcode</code> 
+                  {" "}(e.g., kanika_kan16@aclb, merchant@wing)
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -289,7 +287,7 @@ const BakongConfig = () => {
             <div className="p-4 bg-muted rounded-lg space-y-3">
               <p className="text-sm font-medium">Webhook URL</p>
               <code className="block p-3 bg-background rounded text-xs break-all">
-                {`https://cebhteyhrcdsfhiwozfp.supabase.co/functions/v1/bakong-webhook`}
+                {`https://fzjeljgmsuyfqzbobokx.supabase.co/functions/v1/bakong-webhook`}
               </code>
               <p className="text-xs text-muted-foreground">
                 Configure this URL in your Bakong merchant dashboard to receive real-time payment notifications.

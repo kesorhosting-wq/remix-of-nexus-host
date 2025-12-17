@@ -136,6 +136,7 @@ export type Database = {
       }
       game_plans: {
         Row: {
+          billing_days: number | null
           cpu: string | null
           created_at: string
           game_id: string
@@ -158,6 +159,7 @@ export type Database = {
           storage: string | null
         }
         Insert: {
+          billing_days?: number | null
           cpu?: string | null
           created_at?: string
           game_id: string
@@ -180,6 +182,7 @@ export type Database = {
           storage?: string | null
         }
         Update: {
+          billing_days?: number | null
           cpu?: string | null
           created_at?: string
           game_id?: string

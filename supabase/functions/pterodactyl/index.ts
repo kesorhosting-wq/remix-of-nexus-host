@@ -329,12 +329,18 @@ async function createServer(
 
   console.log("Server created successfully:", serverId);
 
-  // Update order with server ID
+  // Get billing_days from plan for next_due_date calculation
+  const billingDays = planConfig?.billing_days || 30;
+  const nextDueDate = new Date();
+  nextDueDate.setDate(nextDueDate.getDate() + billingDays);
+
+  // Update order with server ID and next due date
   await supabase
     .from("orders")
     .update({
       server_id: serverId,
       status: "active",
+      next_due_date: nextDueDate.toISOString(),
       server_details: {
         ...serverDetails,
         pterodactyl_id: serverData.attributes.id,
@@ -342,6 +348,7 @@ async function createServer(
         pterodactyl_identifier: serverId,
         ip: allocation.ip,
         port: allocation.port,
+        billing_days: billingDays,
       },
     })
     .eq("id", orderId);
@@ -357,6 +364,7 @@ async function createServer(
       ip: allocation.ip,
       port: allocation.port,
     },
+    nextDueDate: nextDueDate.toISOString(),
   };
 }
 

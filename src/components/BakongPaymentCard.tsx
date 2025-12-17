@@ -95,7 +95,23 @@ const BakongPaymentCard = ({
 
         // Update order and invoice status
         await supabase.from("orders").update({ status: "paid" }).eq("id", orderId);
-        await supabase.from("invoices").update({ status: "paid", paid_at: new Date().toISOString() }).eq("order_id", orderId);
+        const { data: invoiceUpdate } = await supabase
+          .from("invoices")
+          .update({ status: "paid", paid_at: new Date().toISOString() })
+          .eq("order_id", orderId)
+          .select()
+          .single();
+
+        // Send payment confirmation email
+        if (invoiceUpdate) {
+          try {
+            await supabase.functions.invoke("send-email", {
+              body: { action: "payment-confirmation", invoiceId: invoiceUpdate.id }
+            });
+          } catch (emailError) {
+            console.error("Email notification error:", emailError);
+          }
+        }
 
         // Trigger server provisioning
         setPaymentStatus("provisioning");
@@ -112,6 +128,15 @@ const BakongPaymentCard = ({
             toast({ title: "Server provisioning started", description: "Your server is being set up. Check your services page." });
           } else {
             toast({ title: "Server created!", description: "Your server is now active." });
+            
+            // Send server setup email
+            try {
+              await supabase.functions.invoke("send-email", {
+                body: { action: "server-setup-complete", orderId }
+              });
+            } catch (emailError) {
+              console.error("Email notification error:", emailError);
+            }
           }
         }
 

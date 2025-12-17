@@ -19,6 +19,7 @@ import PterodactylConfig from "@/components/admin/PterodactylConfig";
 import PlanPterodactylEditor from "@/components/admin/PlanPterodactylEditor";
 import BakongConfig from "@/components/admin/BakongConfig";
 import RenewalReminders from "@/components/admin/RenewalReminders";
+import SMTPConfig from "@/components/admin/SMTPConfig";
 
 const Admin = () => {
   const { toast } = useToast();
@@ -911,6 +912,7 @@ const Admin = () => {
         {activeTab === "billing" && (
           <div className="space-y-6">
             <BakongConfig />
+            <SMTPConfig />
             <RenewalReminders />
           </div>
         )}

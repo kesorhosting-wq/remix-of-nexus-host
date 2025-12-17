@@ -18,11 +18,15 @@ import {
   CheckCircle2,
   AlertCircle,
   CreditCard,
-  Zap
+  Zap,
+  Eye,
+  Settings
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { useToast } from '@/hooks/use-toast';
+import ServerControlPanel from '@/components/client/ServerControlPanel';
+import ModernInvoice from '@/components/client/ModernInvoice';
 
 interface Order {
   id: string;
@@ -40,9 +44,15 @@ interface Invoice {
   id: string;
   invoice_number: string;
   status: string;
+  subtotal: number;
+  tax: number;
+  discount: number;
   total: number;
   due_date: string;
   created_at: string;
+  paid_at: string | null;
+  payment_method: string | null;
+  notes: string | null;
 }
 
 interface Ticket {
@@ -66,6 +76,8 @@ const ClientArea = () => {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [panelUrl, setPanelUrl] = useState<string | null>(null);
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
@@ -366,16 +378,29 @@ const ClientArea = () => {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
                         {getStatusBadge(order.status)}
-                        {order.server_id && panelUrl && order.status === 'active' ? (
-                          <Button 
-                            size="sm"
-                            onClick={() => window.open(`${panelUrl}/server/${order.server_id}`, '_blank')}
-                          >
-                            <Server className="w-4 h-4 mr-2" />
-                            Manage Server
-                          </Button>
+                        {order.server_id && order.status === 'active' ? (
+                          <>
+                            <Button 
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => setSelectedOrder(order)}
+                            >
+                              <Settings className="w-4 h-4 mr-2" />
+                              Control Panel
+                            </Button>
+                            {panelUrl && (
+                              <Button 
+                                size="sm"
+                                variant="outline"
+                                onClick={() => window.open(`${panelUrl}/server/${order.server_id}`, '_blank')}
+                              >
+                                <Server className="w-4 h-4 mr-2" />
+                                Full Panel
+                              </Button>
+                            )}
+                          </>
                         ) : order.status === 'provisioning' ? (
                           <Button variant="outline" size="sm" disabled>
                             <Clock className="w-4 h-4 mr-2 animate-spin" />
@@ -419,6 +444,14 @@ const ClientArea = () => {
                       <div className="flex items-center gap-3">
                         <span className="text-xl font-bold">${invoice.total}</span>
                         {getStatusBadge(invoice.status)}
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => setSelectedInvoice(invoice)}
+                        >
+                          <Eye className="w-4 h-4 mr-2" />
+                          View
+                        </Button>
                         {invoice.status === 'unpaid' && (
                           <Button size="sm">
                             {t('billing.payNow')}
@@ -521,6 +554,24 @@ const ClientArea = () => {
       </main>
 
       <Footer />
+
+      {/* Server Control Panel Modal */}
+      {selectedOrder && (
+        <ServerControlPanel
+          order={selectedOrder}
+          panelUrl={panelUrl}
+          onClose={() => setSelectedOrder(null)}
+          onRefresh={fetchData}
+        />
+      )}
+
+      {/* Invoice Modal */}
+      {selectedInvoice && (
+        <ModernInvoice
+          invoice={selectedInvoice}
+          onClose={() => setSelectedInvoice(null)}
+        />
+      )}
     </div>
   );
 };

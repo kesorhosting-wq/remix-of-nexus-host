@@ -309,6 +309,23 @@ serve(async (req) => {
         body: JSON.stringify({ md5: md5Hash }),
       });
 
+      // Check if response is OK and is JSON
+      const contentType = checkResponse.headers.get("content-type");
+      if (!checkResponse.ok || !contentType?.includes("application/json")) {
+        const responseText = await checkResponse.text();
+        console.error(`[CHECK] Bakong API error - Status: ${checkResponse.status}, Response: ${responseText.substring(0, 200)}`);
+        
+        // If API is unavailable, return pending status instead of error
+        return new Response(
+          JSON.stringify({
+            success: true,
+            status: "pending",
+            message: "Unable to verify payment status with Bakong API. Please try again.",
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       const checkResult = await checkResponse.json();
       console.log(`[CHECK] Bakong response:`, JSON.stringify(checkResult));
 

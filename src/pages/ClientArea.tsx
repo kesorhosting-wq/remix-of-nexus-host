@@ -31,6 +31,7 @@ interface Order {
   billing_cycle: string;
   next_due_date: string;
   server_details: any;
+  server_id: string | null;
   created_at: string;
   products?: { name: string; description: string } | null;
 }
@@ -64,7 +65,7 @@ const ClientArea = () => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [activeTab, setActiveTab] = useState('dashboard');
-
+  const [panelUrl, setPanelUrl] = useState<string | null>(null);
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
@@ -106,15 +107,17 @@ const ClientArea = () => {
   }, [orders]);
 
   const fetchData = async () => {
-    const [ordersRes, invoicesRes, ticketsRes] = await Promise.all([
+    const [ordersRes, invoicesRes, ticketsRes, integrationRes] = await Promise.all([
       supabase.from('orders').select('*, products(name, description)').order('created_at', { ascending: false }),
       supabase.from('invoices').select('*').order('created_at', { ascending: false }),
-      supabase.from('tickets').select('*').order('created_at', { ascending: false })
+      supabase.from('tickets').select('*').order('created_at', { ascending: false }),
+      supabase.from('server_integrations').select('api_url').eq('type', 'pterodactyl').eq('enabled', true).maybeSingle()
     ]);
 
     if (ordersRes.data) setOrders(ordersRes.data);
     if (invoicesRes.data) setInvoices(invoicesRes.data);
     if (ticketsRes.data) setTickets(ticketsRes.data);
+    if (integrationRes.data) setPanelUrl(integrationRes.data.api_url);
   };
 
   const handleLogout = async () => {
@@ -350,17 +353,39 @@ const ClientArea = () => {
                           <Zap className="w-6 h-6 text-primary" />
                         </div>
                         <div>
-                          <h3 className="font-semibold text-lg">{order.products?.name || 'Service'}</h3>
+                          <h3 className="font-semibold text-lg">
+                            {order.server_details?.plan_name || order.products?.name || 'Service'}
+                          </h3>
                           <p className="text-sm text-muted-foreground">
                             ${order.price}/{order.billing_cycle} • Due: {order.next_due_date ? new Date(order.next_due_date).toLocaleDateString() : 'N/A'}
                           </p>
+                          {order.server_details?.ip && order.server_details?.port && (
+                            <p className="text-xs text-muted-foreground font-mono mt-1">
+                              {order.server_details.ip}:{order.server_details.port}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
                         {getStatusBadge(order.status)}
-                        <Button variant="outline" size="sm">
-                          {t('billing.manageService')}
-                        </Button>
+                        {order.server_id && panelUrl && order.status === 'active' ? (
+                          <Button 
+                            size="sm"
+                            onClick={() => window.open(`${panelUrl}/server/${order.server_id}`, '_blank')}
+                          >
+                            <Server className="w-4 h-4 mr-2" />
+                            Manage Server
+                          </Button>
+                        ) : order.status === 'provisioning' ? (
+                          <Button variant="outline" size="sm" disabled>
+                            <Clock className="w-4 h-4 mr-2 animate-spin" />
+                            Setting up...
+                          </Button>
+                        ) : (
+                          <Button variant="outline" size="sm">
+                            {t('billing.manageService')}
+                          </Button>
+                        )}
                       </div>
                     </CardContent>
                   </Card>

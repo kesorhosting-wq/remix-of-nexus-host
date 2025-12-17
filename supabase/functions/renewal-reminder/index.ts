@@ -37,6 +37,21 @@ serve(async (req) => {
         });
       }
 
+      case "auto-suspend": {
+        const result = await autoSuspendOverdue(supabase);
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "renew": {
+        const { orderId, paymentId } = body;
+        const result = await renewService(supabase, orderId, paymentId);
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }
@@ -149,5 +164,183 @@ async function getPendingReminders(supabase: any) {
     overdueCount: pendingReminders.filter((r: any) => r.isOverdue).length,
     dueSoonCount: pendingReminders.filter((r: any) => !r.isOverdue && r.daysUntilDue <= 3).length,
     reminders: pendingReminders,
+  };
+}
+
+async function autoSuspendOverdue(supabase: any) {
+  console.log("Checking for overdue orders to suspend...");
+
+  const now = new Date();
+
+  // Get active orders that are past due date
+  const { data: overdueOrders, error } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("status", "active")
+    .lt("next_due_date", now.toISOString());
+
+  if (error) {
+    console.error("Error fetching overdue orders:", error);
+    throw new Error("Failed to fetch overdue orders");
+  }
+
+  const suspended: string[] = [];
+
+  for (const order of overdueOrders || []) {
+    if (!order.server_id) continue;
+
+    console.log(`Suspending server ${order.server_id} for order ${order.id}`);
+
+    // Get Pterodactyl config
+    const { data: integration } = await supabase
+      .from("server_integrations")
+      .select("*")
+      .eq("type", "pterodactyl")
+      .eq("enabled", true)
+      .maybeSingle();
+
+    if (integration) {
+      try {
+        // Get server internal ID
+        const serverRes = await fetch(
+          `${integration.api_url}/api/application/servers/external/${order.server_id}`,
+          {
+            headers: {
+              Authorization: `Bearer ${integration.api_key}`,
+              Accept: "application/json",
+            },
+          }
+        );
+
+        if (serverRes.ok) {
+          const serverData = await serverRes.json();
+          const internalId = serverData.attributes.id;
+
+          // Suspend the server
+          await fetch(
+            `${integration.api_url}/api/application/servers/${internalId}/suspend`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${integration.api_key}`,
+                Accept: "application/json",
+              },
+            }
+          );
+
+          // Update order status
+          await supabase
+            .from("orders")
+            .update({ status: "suspended" })
+            .eq("id", order.id);
+
+          suspended.push(order.id);
+          console.log(`Successfully suspended server for order ${order.id}`);
+        }
+      } catch (e) {
+        console.error(`Failed to suspend server for order ${order.id}:`, e);
+      }
+    }
+  }
+
+  return {
+    success: true,
+    checkedAt: now.toISOString(),
+    overdueCount: overdueOrders?.length || 0,
+    suspendedCount: suspended.length,
+    suspendedOrders: suspended,
+  };
+}
+
+async function renewService(supabase: any, orderId: string, paymentId: string) {
+  console.log(`Renewing service for order ${orderId}`);
+
+  // Get order details
+  const { data: order, error: orderError } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", orderId)
+    .single();
+
+  if (orderError || !order) {
+    throw new Error("Order not found");
+  }
+
+  // Get plan billing days
+  const planId = order.server_details?.plan_id;
+  let billingDays = 30;
+
+  if (planId) {
+    const { data: plan } = await supabase
+      .from("game_plans")
+      .select("billing_days")
+      .eq("plan_id", planId)
+      .maybeSingle();
+
+    if (plan?.billing_days) {
+      billingDays = plan.billing_days;
+    }
+  }
+
+  // Calculate new due date
+  const newDueDate = new Date();
+  newDueDate.setDate(newDueDate.getDate() + billingDays);
+
+  // If suspended, unsuspend the server
+  if (order.status === "suspended" && order.server_id) {
+    const { data: integration } = await supabase
+      .from("server_integrations")
+      .select("*")
+      .eq("type", "pterodactyl")
+      .eq("enabled", true)
+      .maybeSingle();
+
+    if (integration) {
+      try {
+        const serverRes = await fetch(
+          `${integration.api_url}/api/application/servers/external/${order.server_id}`,
+          {
+            headers: {
+              Authorization: `Bearer ${integration.api_key}`,
+              Accept: "application/json",
+            },
+          }
+        );
+
+        if (serverRes.ok) {
+          const serverData = await serverRes.json();
+          const internalId = serverData.attributes.id;
+
+          await fetch(
+            `${integration.api_url}/api/application/servers/${internalId}/unsuspend`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${integration.api_key}`,
+                Accept: "application/json",
+              },
+            }
+          );
+        }
+      } catch (e) {
+        console.error("Failed to unsuspend server:", e);
+      }
+    }
+  }
+
+  // Update order
+  await supabase
+    .from("orders")
+    .update({
+      status: "active",
+      next_due_date: newDueDate.toISOString(),
+    })
+    .eq("id", orderId);
+
+  return {
+    success: true,
+    orderId,
+    newDueDate: newDueDate.toISOString(),
+    billingDays,
   };
 }

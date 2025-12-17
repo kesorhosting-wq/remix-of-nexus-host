@@ -1,9 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { QrCode, Copy, Check, Timer, Smartphone, Shield, RefreshCw, Loader2 } from "lucide-react";
+import { QrCode, Copy, Check, Timer, Smartphone, Shield, RefreshCw, Loader2, CheckCircle2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface BakongPaymentCardProps {
   qrCode: string;
@@ -29,15 +31,30 @@ const BakongPaymentCard = ({
   exchangeRate,
 }: BakongPaymentCardProps) => {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [timeLeft, setTimeLeft] = useState(expiresIn);
   const [copied, setCopied] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [paymentStatus, setPaymentStatus] = useState<"pending" | "paid" | "provisioning" | "active">("pending");
+  const [autoPolling, setAutoPolling] = useState(true);
+
+  // Auto-poll for payment status every 5 seconds
+  useEffect(() => {
+    if (!autoPolling || paymentStatus !== "pending") return;
+    
+    const pollInterval = setInterval(async () => {
+      await checkPaymentStatus(true);
+    }, 5000);
+
+    return () => clearInterval(pollInterval);
+  }, [autoPolling, paymentStatus, orderId]);
 
   useEffect(() => {
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
+          setAutoPolling(false);
           return 0;
         }
         return prev - 1;
@@ -60,12 +77,63 @@ const BakongPaymentCard = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleCheckPayment = async () => {
-    setChecking(true);
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    setChecking(false);
-    toast({ title: "Payment not yet received", description: "Please complete the payment in your Bakong app" });
-  };
+  const checkPaymentStatus = useCallback(async (silent = false) => {
+    if (!silent) setChecking(true);
+    
+    try {
+      // Check payment status via edge function
+      const { data, error } = await supabase.functions.invoke("bakong-qr", {
+        body: { action: "check-payment", orderId },
+      });
+
+      if (error) throw error;
+
+      if (data?.status === "paid") {
+        setPaymentStatus("paid");
+        setAutoPolling(false);
+        toast({ title: "Payment received!", description: "Setting up your server..." });
+
+        // Update order and invoice status
+        await supabase.from("orders").update({ status: "paid" }).eq("id", orderId);
+        await supabase.from("invoices").update({ status: "paid", paid_at: new Date().toISOString() }).eq("order_id", orderId);
+
+        // Trigger server provisioning
+        setPaymentStatus("provisioning");
+        
+        const { data: order } = await supabase.from("orders").select("*").eq("id", orderId).single();
+        
+        if (order) {
+          const { error: provisionError } = await supabase.functions.invoke("pterodactyl", {
+            body: { action: "create", orderId, serverDetails: order.server_details },
+          });
+
+          if (provisionError) {
+            console.error("Provisioning error:", provisionError);
+            toast({ title: "Server provisioning started", description: "Your server is being set up. Check your services page." });
+          } else {
+            toast({ title: "Server created!", description: "Your server is now active." });
+          }
+        }
+
+        setPaymentStatus("active");
+        onComplete?.();
+        
+        // Redirect to client area after 2 seconds
+        setTimeout(() => navigate("/client"), 2000);
+      } else if (!silent) {
+        toast({ title: "Payment not yet received", description: "Please complete the payment in your Bakong app" });
+      }
+    } catch (error: any) {
+      console.error("Payment check error:", error);
+      if (!silent) {
+        toast({ title: "Error checking payment", description: error.message, variant: "destructive" });
+      }
+    } finally {
+      if (!silent) setChecking(false);
+    }
+  }, [orderId, toast, navigate, onComplete]);
+
+  const handleCheckPayment = () => checkPaymentStatus(false);
 
   const isExpired = timeLeft === 0;
 

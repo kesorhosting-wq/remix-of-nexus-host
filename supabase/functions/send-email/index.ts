@@ -23,14 +23,10 @@ async function getSMTPSettings(supabase: any) {
 }
 
 async function sendEmail(settings: any, to: string, subject: string, html: string) {
-  // Using Nodemailer-compatible SMTP via fetch to an SMTP relay
-  // For production, integrate with Resend, SendGrid, or similar
-  
   console.log(`Sending email to: ${to}`);
   console.log(`Subject: ${subject}`);
   console.log(`From: ${settings.from_name} <${settings.from_email}>`);
   
-  // For now, we'll use a simulated success or integrate with Resend if available
   const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
   
   if (RESEND_API_KEY) {
@@ -72,7 +68,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { action, to, orderId, invoiceId, serverDetails } = body;
+    const { action, to, orderId, invoiceId, serverDetails, resetUrl, userName } = body;
 
     console.log(`Email action: ${action}`);
 
@@ -82,6 +78,31 @@ serve(async (req) => {
       case "test": {
         const html = generateTestEmail(settings.from_name);
         await sendEmail(settings, to || settings.from_email, "Test Email", html);
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "welcome": {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("email")
+          .eq("user_id", to)
+          .single();
+        
+        const email = profile?.email || to;
+        const html = generateWelcomeEmail(userName || email.split("@")[0], settings.from_name);
+        await sendEmail(settings, email, `Welcome to ${settings.from_name}!`, html);
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "password-reset": {
+        const html = generatePasswordResetEmail(resetUrl, settings.from_name);
+        await sendEmail(settings, to, "Reset Your Password", html);
+        
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -203,6 +224,109 @@ function generateTestEmail(brandName: string): string {
         </div>
         <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
           ${brandName} • Email Notifications
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generateWelcomeEmail(userName: string, brandName: string): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 80px; height: 80px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 40px;">🎮</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px;">Welcome to ${brandName}!</h1>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 18px; line-height: 1.6;">
+            Hey <strong>${userName}</strong>! 👋
+          </p>
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Welcome aboard! We're thrilled to have you join our gaming community. Your account has been successfully created and you're ready to start hosting your game servers.
+          </p>
+          
+          <div style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #bae6fd;">
+            <h3 style="margin: 0 0 16px 0; color: #0369a1;">🚀 Getting Started</h3>
+            <ul style="margin: 0; padding-left: 20px; color: #0c4a6e;">
+              <li style="margin-bottom: 8px;">Browse our available game servers</li>
+              <li style="margin-bottom: 8px;">Choose a plan that fits your needs</li>
+              <li style="margin-bottom: 8px;">Complete checkout and your server will be ready in minutes</li>
+              <li>Manage your servers from our easy-to-use control panel</li>
+            </ul>
+          </div>
+          
+          <div style="background: #fef3c7; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #f59e0b;">
+            <p style="margin: 0; color: #92400e; font-size: 14px;">
+              <strong>💡 Pro Tip:</strong> Need help? Our support team is available 24/7 through our ticket system!
+            </p>
+          </div>
+          
+          <a href="#" style="display: block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin-top: 24px;">
+            Start Exploring
+          </a>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Premium Game Hosting
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generatePasswordResetEmail(resetUrl: string, brandName: string): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 60px; height: 60px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 30px;">🔐</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px;">Password Reset Request</h1>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            We received a request to reset your password for your ${brandName} account.
+          </p>
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Click the button below to set a new password. This link will expire in 1 hour.
+          </p>
+          
+          <a href="${resetUrl}" style="display: block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin: 24px 0;">
+            Reset Password
+          </a>
+          
+          <div style="background: #fef2f2; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #ef4444;">
+            <p style="margin: 0; color: #991b1b; font-size: 14px;">
+              <strong>⚠️ Didn't request this?</strong> If you didn't request a password reset, please ignore this email. Your password will remain unchanged.
+            </p>
+          </div>
+          
+          <p style="color: #6b7280; font-size: 14px; line-height: 1.6;">
+            If the button doesn't work, copy and paste this link into your browser:
+          </p>
+          <p style="color: #6366f1; font-size: 12px; word-break: break-all; font-family: monospace; background: #f4f4f5; padding: 12px; border-radius: 6px;">
+            ${resetUrl}
+          </p>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Account Security
         </p>
       </div>
     </body>

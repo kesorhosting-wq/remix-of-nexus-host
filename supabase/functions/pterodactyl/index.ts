@@ -95,6 +95,15 @@ serve(async (req) => {
         });
       }
 
+      case "power": {
+        // Handle power actions (start, stop, restart, kill)
+        const { signal } = body;
+        const result = await sendPowerSignal(config.apiUrl, config.apiKey, serverId, signal);
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       case "suspend": {
         const result = await suspendServer(config.apiUrl, apiHeaders, serverId);
         await supabase.from("orders").update({ status: "suspended" }).eq("server_id", serverId);
@@ -422,6 +431,7 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
 
   // Use specified node or first available
   const selectedNodeId = nodeId || nodesData.data[0].attributes.id;
+  const selectedNode = nodesData.data.find((n: any) => n.attributes.id === selectedNodeId) || nodesData.data[0];
   
   const allocationsResponse = await fetch(
     `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
@@ -430,12 +440,64 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
   const allocationsData = await allocationsResponse.json();
 
   // Find unassigned allocation
-  const availableAllocation = allocationsData.data?.find(
+  let availableAllocation = allocationsData.data?.find(
     (a: any) => !a.attributes.assigned
   );
 
+  // If no allocation available, try to create one
   if (!availableAllocation) {
-    throw new Error("No available allocations");
+    console.log("No available allocations, attempting to create one...");
+    
+    // Get node's IP address from its FQDN or existing allocations
+    let nodeIp = selectedNode.attributes.fqdn || "0.0.0.0";
+    
+    // Try to get an existing IP from allocations
+    if (allocationsData.data && allocationsData.data.length > 0) {
+      nodeIp = allocationsData.data[0].attributes.ip;
+    }
+    
+    // Find a free port (start from 25565 for Minecraft, increment if taken)
+    const usedPorts = new Set(allocationsData.data?.map((a: any) => a.attributes.port) || []);
+    let newPort = 25565;
+    while (usedPorts.has(newPort) && newPort < 30000) {
+      newPort++;
+    }
+    
+    // Create new allocation
+    const createAllocationResponse = await fetch(
+      `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          ip: nodeIp,
+          ports: [newPort.toString()],
+        }),
+      }
+    );
+    
+    if (!createAllocationResponse.ok) {
+      const errorText = await createAllocationResponse.text();
+      console.error("Failed to create allocation:", errorText);
+      throw new Error("No available allocations and failed to create new one. Please add allocations in Pterodactyl panel.");
+    }
+    
+    // Fetch allocations again to get the new one
+    const newAllocationsResponse = await fetch(
+      `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
+      { headers }
+    );
+    const newAllocationsData = await newAllocationsResponse.json();
+    
+    availableAllocation = newAllocationsData.data?.find(
+      (a: any) => !a.attributes.assigned && a.attributes.port === newPort
+    );
+    
+    if (!availableAllocation) {
+      throw new Error("Failed to find newly created allocation");
+    }
+    
+    console.log("Created new allocation:", availableAllocation.attributes);
   }
 
   return {
@@ -443,6 +505,52 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
     ip: availableAllocation.attributes.ip,
     port: availableAllocation.attributes.port,
   };
+}
+
+async function sendPowerSignal(apiUrl: string, apiKey: string, serverId: string, signal: string) {
+  // First get server details using external ID
+  const headers = {
+    "Authorization": `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  };
+  
+  const serverResponse = await fetch(
+    `${apiUrl}/api/application/servers/external/${serverId}`,
+    { headers }
+  );
+
+  if (!serverResponse.ok) {
+    throw new Error("Server not found");
+  }
+
+  const serverData = await serverResponse.json();
+  const serverUuid = serverData.attributes.uuid;
+  
+  // Use client API for power signals
+  const clientHeaders = {
+    "Authorization": `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  };
+  
+  const powerResponse = await fetch(
+    `${apiUrl}/api/client/servers/${serverUuid}/power`,
+    {
+      method: "POST",
+      headers: clientHeaders,
+      body: JSON.stringify({ signal }),
+    }
+  );
+
+  if (!powerResponse.ok) {
+    const errorText = await powerResponse.text();
+    console.error("Power signal error:", errorText);
+    throw new Error(`Failed to send ${signal} signal`);
+  }
+
+  console.log(`Power signal ${signal} sent to server ${serverId}`);
+  return { success: true, message: `Server ${signal} signal sent` };
 }
 
 async function suspendServer(apiUrl: string, headers: Record<string, string>, serverId: string) {

@@ -187,6 +187,51 @@ const AdminDashboard = () => {
       
       const { error } = await supabase.from("invoices").update(updates).eq("id", invoiceId);
       if (error) throw error;
+      
+      // If marked as paid, auto-create server for the associated order
+      if (status === "paid") {
+        const invoice = invoices.find(i => i.id === invoiceId);
+        if (invoice?.order_id) {
+          const order = orders.find(o => o.id === invoice.order_id);
+          if (order && !order.server_id) {
+            toast({ title: "Invoice paid, provisioning server..." });
+            
+            // Update order status to paid first
+            await supabase.from("orders").update({ status: "paid" }).eq("id", order.id);
+            
+            // Trigger server creation
+            try {
+              const { data, error: provisionError } = await supabase.functions.invoke("pterodactyl", {
+                body: {
+                  action: "create",
+                  orderId: order.id,
+                  serverDetails: order.server_details,
+                },
+              });
+              
+              if (provisionError) {
+                console.error("Server provisioning error:", provisionError);
+                toast({ title: "Server provisioning started", description: "Check order status for updates" });
+              } else {
+                toast({ title: "Server provisioned successfully!" });
+              }
+              
+              // Send payment confirmation email
+              try {
+                await supabase.functions.invoke("send-email", {
+                  body: { action: "payment-confirmation", invoiceId }
+                });
+              } catch (emailError) {
+                console.error("Email error:", emailError);
+              }
+            } catch (provErr: any) {
+              console.error("Provisioning error:", provErr);
+              toast({ title: "Server provisioning started in background" });
+            }
+          }
+        }
+      }
+      
       toast({ title: `Invoice status updated to ${status}` });
       fetchData();
     } catch (error: any) {

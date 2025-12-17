@@ -41,6 +41,7 @@ interface PlanPterodactylEditorProps {
     environment?: Record<string, string>;
     limits?: PterodactylLimits;
     feature_limits?: PterodactylFeatureLimits;
+    billing_days?: number;
   };
   onSave: () => void;
 }
@@ -89,6 +90,7 @@ const PlanPterodactylEditor = ({ planId, planName, currentConfig, onSave }: Plan
   const [featureLimits, setFeatureLimits] = useState<PterodactylFeatureLimits>(
     currentConfig?.feature_limits || { databases: 1, backups: 2, allocations: 1 }
   );
+  const [billingDays, setBillingDays] = useState(currentConfig?.billing_days || 30);
 
   useEffect(() => {
     if (open) {
@@ -174,6 +176,7 @@ const PlanPterodactylEditor = ({ planId, planName, currentConfig, onSave }: Plan
           pterodactyl_environment: environment as any,
           pterodactyl_limits: limits as any,
           pterodactyl_feature_limits: featureLimits as any,
+          billing_days: billingDays,
         })
         .eq("plan_id", planId);
 
@@ -267,6 +270,32 @@ const PlanPterodactylEditor = ({ planId, planName, currentConfig, onSave }: Plan
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Billing Days */}
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="pt-4">
+                <Label className="text-base font-semibold mb-2 block">Billing Cycle</Label>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Set how many days until the service expires and needs renewal
+                </p>
+                <div className="flex items-center gap-4">
+                  <Input
+                    type="number"
+                    min={1}
+                    value={billingDays}
+                    onChange={(e) => setBillingDays(parseInt(e.target.value) || 30)}
+                    className="w-24"
+                  />
+                  <span className="text-sm text-muted-foreground">days</span>
+                  <div className="flex gap-2 ml-auto">
+                    <Button type="button" variant="outline" size="sm" onClick={() => setBillingDays(7)}>7d</Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setBillingDays(30)}>30d</Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setBillingDays(90)}>90d</Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setBillingDays(365)}>1yr</Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
             {/* Docker Image & Startup */}
             <div className="space-y-2">

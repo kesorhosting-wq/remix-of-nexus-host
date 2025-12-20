@@ -6,6 +6,7 @@ import PricingSection from "@/components/PricingSection";
 import LocationsSection from "@/components/LocationsSection";
 import Footer from "@/components/Footer";
 import SeasonalEffects from "@/components/SeasonalEffects";
+import SeasonalBackground from "@/components/SeasonalBackground";
 import { PricingProvider } from "@/contexts/PricingContext";
 import { useDataSync } from "@/hooks/useDataSync";
 import { useBranding } from "@/hooks/useBranding";
@@ -29,6 +30,7 @@ const Index = () => {
   return (
     <PricingProvider>
       <div className="min-h-screen bg-background">
+        <SeasonalBackground />
         <SeasonalEffects />
         <Navbar />
         <main>

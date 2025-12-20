@@ -9,10 +9,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
-import { Server, CreditCard, QrCode, ArrowLeft, Loader2 } from "lucide-react";
+import { Server, CreditCard, QrCode, ArrowLeft, Loader2, Wallet } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import BakongPaymentCard from "@/components/BakongPaymentCard";
+import IkhodePaymentCard from "@/components/IkhodePaymentCard";
+import { useIkhodePayment } from "@/hooks/useIkhodePayment";
 
 interface GamePlan {
   id: string;
@@ -42,10 +44,15 @@ const Checkout = () => {
   const [game, setGame] = useState<Game | null>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState("bakong");
+  const [paymentMethod, setPaymentMethod] = useState("ikhode");
   const [serverName, setServerName] = useState("");
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [orderId, setOrderId] = useState<string | null>(null);
+  const [transactionId, setTransactionId] = useState<string | null>(null);
+  const [wsUrl, setWsUrl] = useState<string | null>(null);
+  const [ikhodeAvailable, setIkhodeAvailable] = useState(false);
+  
+  const { generateKHQR, fetchConfig, getWebSocketUrl, loading: ikhodeLoading } = useIkhodePayment();
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -53,7 +60,16 @@ const Checkout = () => {
       return;
     }
     if (planId) fetchPlanData();
+    checkIkhodeAvailability();
   }, [planId, user, authLoading]);
+
+  const checkIkhodeAvailability = async () => {
+    const config = await fetchConfig();
+    if (config?.apiUrl) {
+      setIkhodeAvailable(true);
+      setPaymentMethod("ikhode");
+    }
+  };
 
   const fetchPlanData = async () => {
     try {
@@ -142,24 +158,44 @@ const Checkout = () => {
 
       if (invoiceError) throw invoiceError;
 
-      // Generate BakongKHQR
-      const { data: qrData, error: qrError } = await supabase.functions.invoke(
-        "bakong-qr",
-        {
-          body: {
-            amount: plan.price,
-            currency: "USD",
-            orderId: order.id,
-            invoiceId: invoice.id,
-            description: `${game?.name || "Game"} Server - ${plan.name}`,
-          },
+      // Generate QR based on payment method
+      if (paymentMethod === "ikhode" && ikhodeAvailable) {
+        // Use Ikhode Payment API
+        const result = await generateKHQR(
+          plan.price,
+          order.id,
+          `${game?.name || "Game"} Server - ${plan.name}`
+        );
+
+        if (result) {
+          setQrCode(result.qrCode);
+          setTransactionId(result.transactionId);
+          setWsUrl(getWebSocketUrl());
+          toast({ title: "Order created! Scan QR to pay." });
+        } else {
+          throw new Error("Failed to generate QR code");
         }
-      );
+      } else {
+        // Fallback to original Bakong edge function
+        const { data: qrData, error: qrError } = await supabase.functions.invoke(
+          "bakong-qr",
+          {
+            body: {
+              amount: plan.price,
+              currency: "USD",
+              orderId: order.id,
+              invoiceId: invoice.id,
+              description: `${game?.name || "Game"} Server - ${plan.name}`,
+            },
+          }
+        );
 
-      if (qrError) throw qrError;
+        if (qrError) throw qrError;
 
-      setQrCode(qrData.qrCode);
-      toast({ title: "Order created! Scan QR to pay." });
+        setQrCode(qrData.qrCode);
+        setPaymentMethod("bakong");
+        toast({ title: "Order created! Scan QR to pay." });
+      }
     } catch (error: any) {
       console.error("Checkout error:", error);
       toast({
@@ -277,23 +313,38 @@ const Checkout = () => {
                   <div className="space-y-3">
                     <Label>Payment Method</Label>
                     <RadioGroup value={paymentMethod} onValueChange={setPaymentMethod}>
-                      <div className="flex items-center space-x-3 p-4 border rounded-lg cursor-pointer hover:border-primary">
+                      {ikhodeAvailable && (
+                        <div className="flex items-center space-x-3 p-4 border rounded-lg cursor-pointer hover:border-primary transition-colors">
+                          <RadioGroupItem value="ikhode" id="ikhode" />
+                          <Label htmlFor="ikhode" className="flex items-center gap-2 cursor-pointer flex-1">
+                            <Wallet className="w-5 h-5 text-blue-600" />
+                            <div>
+                              <span className="font-medium">Ikhode KHQR</span>
+                              <p className="text-xs text-muted-foreground">Real-time payment updates</p>
+                            </div>
+                          </Label>
+                        </div>
+                      )}
+                      <div className="flex items-center space-x-3 p-4 border rounded-lg cursor-pointer hover:border-primary transition-colors">
                         <RadioGroupItem value="bakong" id="bakong" />
-                        <Label htmlFor="bakong" className="flex items-center gap-2 cursor-pointer">
-                          <QrCode className="w-5 h-5 text-primary" />
-                          BakongKHQR
+                        <Label htmlFor="bakong" className="flex items-center gap-2 cursor-pointer flex-1">
+                          <QrCode className="w-5 h-5 text-[#e31837]" />
+                          <div>
+                            <span className="font-medium">BakongKHQR</span>
+                            <p className="text-xs text-muted-foreground">Standard payment</p>
+                          </div>
                         </Label>
                       </div>
                     </RadioGroup>
                   </div>
 
-                  <Button
+                    <Button
                     className="w-full"
                     size="lg"
                     onClick={handleCheckout}
-                    disabled={processing}
+                    disabled={processing || ikhodeLoading}
                   >
-                    {processing ? (
+                    {processing || ikhodeLoading ? (
                       <>
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                         Processing...
@@ -303,6 +354,17 @@ const Checkout = () => {
                     )}
                   </Button>
                 </>
+              ) : paymentMethod === "ikhode" && transactionId ? (
+                <IkhodePaymentCard
+                  qrCode={qrCode}
+                  amount={plan.price}
+                  currency="USD"
+                  orderId={orderId || ""}
+                  transactionId={transactionId}
+                  description={`${game?.name || "Game"} Server - ${plan.name}`}
+                  onCancel={() => navigate("/products")}
+                  wsUrl={wsUrl || undefined}
+                />
               ) : (
                 <BakongPaymentCard
                   qrCode={qrCode}

@@ -2,6 +2,8 @@ import { useGameStore } from "@/store/gameStore";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Link } from "react-router-dom";
 import kesorLogo from "@/assets/kesor-logo.png";
+import abaPaywayLogo from "@/assets/aba-payway.svg";
+import khqrBakongLogo from "@/assets/khqr-bakong.png";
 
 // Custom SVG icons for social media
 const FacebookIcon = () => (
@@ -149,11 +151,28 @@ const Footer = () => {
         </div>
 
         {/* Bottom Bar */}
-        <div className="pt-8 border-t border-border/50 text-center">
+        <div className="pt-8 border-t border-border/50 text-center space-y-4">
           <p className="text-muted-foreground text-sm">
-            © {new Date().getFullYear()} {brand.name}. All rights reserved.
+            © {new Date().getFullYear()} {brand.name || "Kesor Hosting"}. All rights reserved.
             {activeTheme && ` ${activeTheme.decorations[0]} Happy ${activeTheme.name}!`}
           </p>
+          
+          {/* Payment Methods */}
+          <div className="flex items-center justify-center gap-2">
+            <span className="text-muted-foreground text-sm">We Accept:</span>
+            <div className="flex items-center gap-3">
+              <img 
+                src={abaPaywayLogo} 
+                alt="ABA PayWay" 
+                className="h-8 w-auto object-contain rounded-lg bg-white p-1"
+              />
+              <img 
+                src={khqrBakongLogo} 
+                alt="KHQR Bakong" 
+                className="h-8 w-auto object-contain rounded-lg"
+              />
+            </div>
+          </div>
         </div>
       </div>
     </footer>

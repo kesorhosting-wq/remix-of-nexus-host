@@ -750,13 +750,15 @@ const AdminDashboard = () => {
                           <AlertDialogContent>
                             <AlertDialogHeader>
                               <AlertDialogTitle>Bulk Suspend Services</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Are you sure you want to suspend {selectedOrders.size} service(s)? This will:
-                                <ul className="list-disc list-inside mt-2 space-y-1">
-                                  <li>Suspend servers in Pterodactyl panel</li>
-                                  <li>Send suspension emails to customers</li>
-                                  <li>Update order status to suspended</li>
-                                </ul>
+                              <AlertDialogDescription asChild>
+                                <div>
+                                  Are you sure you want to suspend {selectedOrders.size} service(s)? This will:
+                                  <ul className="list-disc list-inside mt-2 space-y-1">
+                                    <li>Suspend servers in Pterodactyl panel</li>
+                                    <li>Send suspension emails to customers</li>
+                                    <li>Update order status to suspended</li>
+                                  </ul>
+                                </div>
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
@@ -777,15 +779,17 @@ const AdminDashboard = () => {
                           <AlertDialogContent>
                             <AlertDialogHeader>
                               <AlertDialogTitle>Bulk Delete Services</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Are you sure you want to delete {selectedOrders.size} service(s)? This will:
-                                <ul className="list-disc list-inside mt-2 space-y-1">
-                                  <li>Terminate servers in Pterodactyl panel</li>
-                                  <li>Send termination emails to customers</li>
-                                  <li>Delete all related invoices</li>
-                                  <li>Permanently remove the orders</li>
-                                </ul>
-                                <p className="mt-2 font-semibold text-destructive">This action cannot be undone.</p>
+                              <AlertDialogDescription asChild>
+                                <div>
+                                  Are you sure you want to delete {selectedOrders.size} service(s)? This will:
+                                  <ul className="list-disc list-inside mt-2 space-y-1">
+                                    <li>Terminate servers in Pterodactyl panel</li>
+                                    <li>Send termination emails to customers</li>
+                                    <li>Delete all related invoices</li>
+                                    <li>Permanently remove the orders</li>
+                                  </ul>
+                                  <p className="mt-2 font-semibold text-destructive">This action cannot be undone.</p>
+                                </div>
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
@@ -899,14 +903,16 @@ const AdminDashboard = () => {
                               <AlertDialogContent>
                                 <AlertDialogHeader>
                                   <AlertDialogTitle>Delete Service</AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    Are you sure you want to delete this service? This will:
-                                    <ul className="list-disc list-inside mt-2 space-y-1">
-                                      {order.server_id && <li>Terminate the server in Pterodactyl panel</li>}
-                                      <li>Delete all related invoices</li>
-                                      <li>Permanently remove the order</li>
-                                    </ul>
-                                    <p className="mt-2 font-semibold text-destructive">This action cannot be undone.</p>
+                                  <AlertDialogDescription asChild>
+                                    <div>
+                                      Are you sure you want to delete this service? This will:
+                                      <ul className="list-disc list-inside mt-2 space-y-1">
+                                        {order.server_id && <li>Terminate the server in Pterodactyl panel</li>}
+                                        <li>Delete all related invoices</li>
+                                        <li>Permanently remove the order</li>
+                                      </ul>
+                                      <p className="mt-2 font-semibold text-destructive">This action cannot be undone.</p>
+                                    </div>
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>

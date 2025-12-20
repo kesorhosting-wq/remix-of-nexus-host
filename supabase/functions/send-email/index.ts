@@ -13,10 +13,16 @@ async function getSMTPSettings(supabase: any) {
   const { data, error } = await supabase
     .from("smtp_settings")
     .select("*")
-    .single();
+    .maybeSingle();
   
-  if (error || !data || !data.enabled) {
-    throw new Error("Email notifications are not configured or disabled");
+  if (error) {
+    console.log("Error fetching SMTP settings:", error);
+    return null;
+  }
+  
+  if (!data || !data.enabled) {
+    console.log("Email notifications are not configured or disabled");
+    return null;
   }
   
   return data;
@@ -73,6 +79,14 @@ serve(async (req) => {
     console.log(`Email action: ${action}`);
 
     const settings = await getSMTPSettings(supabase);
+    
+    // If email is not configured, return success but log that email was skipped
+    if (!settings) {
+      console.log(`Email action "${action}" skipped - notifications not configured or disabled`);
+      return new Response(JSON.stringify({ success: true, skipped: true, message: "Email notifications are disabled" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     switch (action) {
       case "test": {

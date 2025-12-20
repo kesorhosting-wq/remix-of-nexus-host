@@ -78,8 +78,11 @@ const Footer = () => {
               <img 
                 src={brand.logoUrl || kesorLogo} 
                 alt={brand.name || "Kesor Hosting"} 
-                className="h-12 w-auto object-contain"
+                className="h-12 w-auto object-contain rounded-xl"
               />
+              <span className="font-display text-xl font-bold text-gradient">
+                {brand.name || "Kesor Hosting"}
+              </span>
             </Link>
             <p className="text-muted-foreground text-sm mb-6">
               {brand.footerDescription || brand.tagline}

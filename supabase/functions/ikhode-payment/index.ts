@@ -64,7 +64,7 @@ serve(async (req) => {
     const body = await req.json();
     const { action, ...params } = body;
 
-    console.log(`Ikhode Payment action: ${action}`, params);
+    console.log(`[Ikhode] Action: ${action}`, params);
 
     switch (action) {
       case "generate-khqr": {
@@ -74,12 +74,16 @@ serve(async (req) => {
         const callbackUrl = `${supabaseUrl}/functions/v1/ikhode-webhook`;
         const webhookSecret = config.webhookSecret || Deno.env.get("IKHODE_WEBHOOK_SECRET") || "";
 
-        // Generate a transaction ID
+        // Generate a transaction ID matching your API format
         const transactionId = `TXN-${orderId.slice(0, 8)}-${Date.now()}`;
 
-        console.log(`Generating KHQR for amount: ${amount}, transactionId: ${transactionId}`);
-        console.log(`Calling API: ${apiUrl}/generate-khqr`);
+        console.log(`[Ikhode] Generating KHQR:`);
+        console.log(`  - Amount: ${amount}`);
+        console.log(`  - Transaction ID: ${transactionId}`);
+        console.log(`  - Callback URL: ${callbackUrl}`);
+        console.log(`  - API Endpoint: ${apiUrl}/generate-khqr`);
 
+        // Call YOUR API endpoint: POST /generate-khqr
         const response = await fetch(`${apiUrl}/generate-khqr`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -95,20 +99,26 @@ serve(async (req) => {
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error("Ikhode API error:", response.status, errorText);
+          console.error(`[Ikhode] API error ${response.status}:`, errorText);
           throw new Error(`API error: ${response.status} - ${errorText}`);
         }
 
         const data = await response.json();
-        console.log("KHQR generated successfully:", { transactionId, hasQrCode: !!data.qrCodeData });
+        console.log(`[Ikhode] KHQR generated successfully, has QR data: ${!!data.qrCodeData}`);
 
         // Store the transaction reference in the order
+        const { data: existingOrder } = await supabase
+          .from("orders")
+          .select("server_details")
+          .eq("id", orderId)
+          .single();
+
         await supabase
           .from("orders")
           .update({ 
-            notes: `Transaction ID: ${transactionId}`,
+            notes: `Transaction: ${transactionId}`,
             server_details: {
-              ...((await supabase.from("orders").select("server_details").eq("id", orderId).single()).data?.server_details || {}),
+              ...(existingOrder?.server_details || {}),
               paymentTransactionId: transactionId,
             }
           })
@@ -143,7 +153,7 @@ serve(async (req) => {
       }
 
       case "get-config": {
-        // Build WebSocket URL from API URL
+        // Build WebSocket URL from API URL (your API uses port 8080)
         const wsPort = config.wsPort || 8080;
         let wsUrl = "";
         
@@ -153,9 +163,11 @@ serve(async (req) => {
             const wsProtocol = url.protocol === "https:" ? "wss:" : "ws:";
             wsUrl = `${wsProtocol}//${url.hostname}:${wsPort}`;
           } catch (e) {
-            console.error("Error parsing API URL for WebSocket:", e);
+            console.error("[Ikhode] Error parsing API URL for WebSocket:", e);
           }
         }
+
+        console.log(`[Ikhode] Config - API: ${apiUrl}, WS: ${wsUrl}`);
 
         return new Response(
           JSON.stringify({
@@ -174,7 +186,7 @@ serve(async (req) => {
         );
     }
   } catch (error: any) {
-    console.error("Ikhode Payment error:", error);
+    console.error("[Ikhode] Error:", error);
     return new Response(
       JSON.stringify({ error: error.message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

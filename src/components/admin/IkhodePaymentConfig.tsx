@@ -6,19 +6,19 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Wallet, Check, X, Loader2, RefreshCw, Save, Settings, Zap, Globe } from "lucide-react";
+import { Wallet, Check, X, Loader2, RefreshCw, Save, Settings, Zap, Globe, Link, Copy } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface IkhodeStatus {
   connected: boolean;
   apiUrl?: string;
-  version?: string;
   wsSupported?: boolean;
 }
 
 interface IkhodeSettings {
   apiUrl: string;
-  wsEnabled: boolean;
+  wsPort: number;
+  webhookSecret: string;
 }
 
 const IkhodePaymentConfig = () => {
@@ -29,8 +29,11 @@ const IkhodePaymentConfig = () => {
   
   const [settings, setSettings] = useState<IkhodeSettings>({
     apiUrl: "",
-    wsEnabled: true,
+    wsPort: 8080,
+    webhookSecret: "",
   });
+
+  const webhookUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ikhode-webhook`;
 
   useEffect(() => {
     fetchSettings();
@@ -41,13 +44,14 @@ const IkhodePaymentConfig = () => {
       .from("payment_gateways")
       .select("*")
       .eq("slug", "ikhode-bakong")
-      .single();
+      .maybeSingle();
 
     if (data?.config) {
       const config = data.config as any;
       setSettings({
         apiUrl: config.apiUrl || "",
-        wsEnabled: config.wsEnabled !== false,
+        wsPort: config.wsPort || 8080,
+        webhookSecret: config.webhookSecret || "",
       });
     }
   };
@@ -64,29 +68,25 @@ const IkhodePaymentConfig = () => {
 
     setTesting(true);
     try {
-      // Test the API by calling the health/status endpoint
-      const response = await fetch(`${settings.apiUrl.replace(/\/$/, "")}/api/v1/banks`);
+      // Test by calling the root endpoint
+      const response = await fetch(settings.apiUrl.replace(/\/$/, ""));
       
-      if (!response.ok) {
+      if (response.ok) {
+        setStatus({
+          connected: true,
+          apiUrl: settings.apiUrl,
+          wsSupported: true,
+        });
+        toast({ title: "API connection successful!" });
+      } else {
         throw new Error(`API returned ${response.status}`);
       }
-      
-      const data = await response.json();
-      
-      setStatus({
-        connected: true,
-        apiUrl: settings.apiUrl,
-        version: "1.0",
-        wsSupported: settings.wsEnabled,
-      });
-      
-      toast({ title: "API connection successful!", description: `Found ${data.length || 0} banks` });
     } catch (error: any) {
       console.error("Ikhode API test failed:", error);
       setStatus({ connected: false });
       toast({ 
         title: "Connection failed", 
-        description: error.message || "Could not connect to the API",
+        description: "Make sure your API is running and accessible",
         variant: "destructive" 
       });
     } finally {
@@ -110,7 +110,7 @@ const IkhodePaymentConfig = () => {
     } catch {
       toast({ 
         title: "Invalid URL", 
-        description: "Please enter a valid URL (e.g., https://your-api.ngrok.io)",
+        description: "Please enter a valid URL (e.g., https://payment.ikhode.site)",
         variant: "destructive" 
       });
       return;
@@ -119,8 +119,9 @@ const IkhodePaymentConfig = () => {
     setSaving(true);
     try {
       const configJson = {
-        apiUrl: settings.apiUrl.replace(/\/$/, ""), // Remove trailing slash
-        wsEnabled: settings.wsEnabled,
+        apiUrl: settings.apiUrl.replace(/\/$/, ""),
+        wsPort: settings.wsPort,
+        webhookSecret: settings.webhookSecret,
       };
 
       // Check if gateway exists
@@ -128,7 +129,7 @@ const IkhodePaymentConfig = () => {
         .from("payment_gateways")
         .select("id")
         .eq("slug", "ikhode-bakong")
-        .single();
+        .maybeSingle();
 
       if (existing) {
         await supabase
@@ -145,7 +146,7 @@ const IkhodePaymentConfig = () => {
           .insert({
             name: "Ikhode Bakong KHQR",
             slug: "ikhode-bakong",
-            description: "Ikhode Technologies Bakong Payment API",
+            description: "Ikhode Technologies Bakong Payment API with real-time WebSocket",
             icon: "wallet",
             enabled: true,
             config: configJson,
@@ -160,6 +161,11 @@ const IkhodePaymentConfig = () => {
     }
   };
 
+  const copyWebhookUrl = () => {
+    navigator.clipboard.writeText(webhookUrl);
+    toast({ title: "Webhook URL copied!" });
+  };
+
   return (
     <Card className="overflow-hidden">
       <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
@@ -171,7 +177,7 @@ const IkhodePaymentConfig = () => {
             <div>
               <CardTitle className="text-white">Ikhode Payment API</CardTitle>
               <CardDescription className="text-white/80">
-                Connect to your local/ngrok Bakong KHQR API
+                Connect to your Bakong KHQR API
               </CardDescription>
             </div>
           </div>
@@ -207,14 +213,62 @@ const IkhodePaymentConfig = () => {
                   <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     id="apiUrl"
-                    placeholder="https://your-api.ngrok.io or http://localhost:3000"
+                    placeholder="https://payment.ikhode.site"
                     value={settings.apiUrl}
                     onChange={(e) => setSettings({ ...settings, apiUrl: e.target.value })}
                     className="pl-10"
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Your ngrok URL or local API URL where the Ikhode Bakong Payment API is running
+                  Your Ikhode Payment API URL (e.g., https://payment.ikhode.site)
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="wsPort">WebSocket Port</Label>
+                <Input
+                  id="wsPort"
+                  type="number"
+                  placeholder="8080"
+                  value={settings.wsPort}
+                  onChange={(e) => setSettings({ ...settings, wsPort: parseInt(e.target.value) || 8080 })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  WebSocket server port (default: 8080)
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="webhookSecret">Webhook Secret (Optional)</Label>
+                <Input
+                  id="webhookSecret"
+                  type="password"
+                  placeholder="Your webhook secret"
+                  value={settings.webhookSecret}
+                  onChange={(e) => setSettings({ ...settings, webhookSecret: e.target.value })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Secret for verifying webhook callbacks (sent as Bearer token)
+                </p>
+              </div>
+
+              <div className="p-4 bg-muted rounded-lg space-y-2">
+                <Label className="text-sm font-medium flex items-center gap-2">
+                  <Link className="w-4 h-4" />
+                  Webhook URL (for your API)
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={webhookUrl}
+                    readOnly
+                    className="font-mono text-xs bg-background"
+                  />
+                  <Button variant="outline" size="icon" onClick={copyWebhookUrl}>
+                    <Copy className="w-4 h-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  This URL is automatically sent to your API as the callbackUrl
                 </p>
               </div>
 
@@ -224,28 +278,20 @@ const IkhodePaymentConfig = () => {
                   <div>
                     <p className="text-sm font-medium">Real-time WebSocket</p>
                     <p className="text-xs text-muted-foreground">
-                      Enable WebSocket for instant payment updates
+                      Your API broadcasts payment_success events on port {settings.wsPort}
                     </p>
                   </div>
                 </div>
-                <Button
-                  type="button"
-                  variant={settings.wsEnabled ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setSettings({ ...settings, wsEnabled: !settings.wsEnabled })}
-                >
-                  {settings.wsEnabled ? "Enabled" : "Disabled"}
-                </Button>
+                <Badge variant="secondary">Active</Badge>
               </div>
 
               <div className="p-4 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
                 <p className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">
-                  API Endpoints Used
+                  Your API Endpoints
                 </p>
                 <ul className="text-xs text-blue-700 dark:text-blue-300 space-y-1 font-mono">
-                  <li>POST /api/v1/generate-khqr - Generate QR code</li>
-                  <li>GET /api/v1/banks - Get supported banks</li>
-                  <li>WS /ws - Real-time payment updates</li>
+                  <li>POST /generate-khqr - Generate KHQR code</li>
+                  <li>WS :{settings.wsPort} - Real-time payment updates</li>
                 </ul>
               </div>
             </div>
@@ -260,7 +306,7 @@ const IkhodePaymentConfig = () => {
             {status?.connected && (
               <div className="p-4 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg space-y-2">
                 <p className="text-sm font-medium text-green-800 dark:text-green-200">
-                  API Connected
+                  ✓ API Connected
                 </p>
                 <div className="text-sm space-y-1">
                   <div>
@@ -269,7 +315,7 @@ const IkhodePaymentConfig = () => {
                   </div>
                   <div>
                     <span className="text-muted-foreground">WebSocket:</span>
-                    <span className="ml-2">{status.wsSupported ? "✓ Enabled" : "✗ Disabled"}</span>
+                    <span className="ml-2">Port {settings.wsPort}</span>
                   </div>
                 </div>
               </div>
@@ -278,22 +324,22 @@ const IkhodePaymentConfig = () => {
             {!status?.connected && status !== null && (
               <div className="p-4 bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg">
                 <p className="text-sm font-medium text-red-800 dark:text-red-200">
-                  Connection Failed
+                  ✗ Connection Failed
                 </p>
                 <p className="text-xs text-red-700 dark:text-red-300 mt-1">
-                  Make sure your API is running and the URL is correct.
-                  If using ngrok, ensure the tunnel is active.
+                  Make sure your API is running and accessible.
                 </p>
               </div>
             )}
 
             <div className="p-4 bg-muted rounded-lg space-y-3">
-              <p className="text-sm font-medium">Setup Instructions</p>
+              <p className="text-sm font-medium">How Your API Works</p>
               <ol className="text-xs text-muted-foreground space-y-2 list-decimal list-inside">
-                <li>Clone the Ikhode Bakong Payment API from GitHub</li>
-                <li>Run <code className="bg-background px-1 rounded">npm install</code> and <code className="bg-background px-1 rounded">npm start</code></li>
-                <li>Start ngrok: <code className="bg-background px-1 rounded">ngrok http 3000</code></li>
-                <li>Copy the ngrok URL and paste it above</li>
+                <li>We call POST /generate-khqr with amount, transactionId, callbackUrl, etc.</li>
+                <li>Your API returns qrCodeData (base64 QR image)</li>
+                <li>Your API polls Bakong every 5s for payment status</li>
+                <li>On payment success, your API calls our webhook (callbackUrl)</li>
+                <li>Your API also broadcasts via WebSocket for instant UI update</li>
               </ol>
             </div>
 

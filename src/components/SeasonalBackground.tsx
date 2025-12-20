@@ -50,8 +50,8 @@ const SeasonalBackground = () => {
 
   return (
     <>
-      {/* Full-screen video background */}
-      <div className="fixed inset-0 z-40 pointer-events-none overflow-hidden">
+      {/* Full-screen video background - behind all content */}
+      <div className="fixed inset-0 -z-10 pointer-events-none overflow-hidden">
         {/* Video */}
         <video
           autoPlay

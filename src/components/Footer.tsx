@@ -1,7 +1,7 @@
-import { Zap } from "lucide-react";
 import { useGameStore } from "@/store/gameStore";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Link } from "react-router-dom";
+import kesorLogo from "@/assets/kesor-logo.png";
 
 // Custom SVG icons for social media
 const FacebookIcon = () => (
@@ -75,10 +75,11 @@ const Footer = () => {
           {/* Brand */}
           <div>
             <Link to="/" className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-                <Zap className="w-5 h-5 text-primary-foreground" />
-              </div>
-              <span className="font-display text-xl font-bold text-gradient">{brand.name}</span>
+              <img 
+                src={brand.logoUrl || kesorLogo} 
+                alt={brand.name || "Kesor Hosting"} 
+                className="h-12 w-auto object-contain"
+              />
             </Link>
             <p className="text-muted-foreground text-sm mb-6">
               {brand.footerDescription || brand.tagline}

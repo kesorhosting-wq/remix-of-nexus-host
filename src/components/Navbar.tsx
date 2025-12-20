@@ -8,6 +8,7 @@ import LanguageSwitcher from "./LanguageSwitcher";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useCart } from "@/contexts/CartContext";
 import { supabase } from "@/integrations/supabase/client";
+import kesorLogo from "@/assets/kesor-logo.png";
 
 const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -43,26 +44,11 @@ const Navbar = () => {
           <div className="flex items-center justify-between h-16 px-6">
             {/* Logo */}
             <a href="/" className="flex items-center gap-3 group">
-              {brand.logoUrl ? (
-                <img 
-                  src={brand.logoUrl} 
-                  alt={brand.name} 
-                  className="h-10 w-auto object-contain"
-                />
-              ) : (
-                <>
-                  <div className="relative">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-                      <Zap className="w-5 h-5 text-primary-foreground" />
-                    </div>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="font-display text-xl font-bold text-gradient">
-                      {brand.name}
-                    </span>
-                  </div>
-                </>
-              )}
+              <img 
+                src={brand.logoUrl || kesorLogo} 
+                alt={brand.name || "Kesor Hosting"} 
+                className="h-12 w-auto object-contain"
+              />
             </a>
 
             {/* Desktop Navigation */}

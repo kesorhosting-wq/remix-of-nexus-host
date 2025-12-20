@@ -18,6 +18,7 @@ import ThemeEditor from "@/components/admin/ThemeEditor";
 import PterodactylConfig from "@/components/admin/PterodactylConfig";
 import PlanPterodactylEditor from "@/components/admin/PlanPterodactylEditor";
 import BakongConfig from "@/components/admin/BakongConfig";
+import IkhodePaymentConfig from "@/components/admin/IkhodePaymentConfig";
 import RenewalReminders from "@/components/admin/RenewalReminders";
 import SMTPConfig from "@/components/admin/SMTPConfig";
 
@@ -911,6 +912,7 @@ const Admin = () => {
         {/* Billing Tab */}
         {activeTab === "billing" && (
           <div className="space-y-6">
+            <IkhodePaymentConfig />
             <BakongConfig />
             <SMTPConfig />
             <RenewalReminders />

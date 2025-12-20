@@ -229,6 +229,16 @@ const AdminDashboard = () => {
         } catch (err) {
           console.error("Panel suspend error:", err);
         }
+        
+        // Send suspension email notification
+        try {
+          await supabase.functions.invoke("send-email", {
+            body: { action: "service-suspended", orderId }
+          });
+          console.log("Suspension email sent");
+        } catch (emailErr) {
+          console.error("Failed to send suspension email:", emailErr);
+        }
       }
       
       // If unsuspending/activating and server exists, unsuspend in Pterodactyl
@@ -260,6 +270,16 @@ const AdminDashboard = () => {
   const handleDeleteOrder = async (order: Order) => {
     setDeletingOrder(order.id);
     try {
+      // Send termination email notification before deleting
+      try {
+        await supabase.functions.invoke("send-email", {
+          body: { action: "service-terminated", orderId: order.id }
+        });
+        console.log("Termination email sent");
+      } catch (emailErr) {
+        console.error("Failed to send termination email:", emailErr);
+      }
+
       // If server exists, terminate it in Pterodactyl first
       if (order.server_id) {
         try {

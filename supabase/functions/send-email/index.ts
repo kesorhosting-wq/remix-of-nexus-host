@@ -183,6 +183,56 @@ serve(async (req) => {
         });
       }
 
+      case "service-suspended": {
+        const { data: order } = await supabase
+          .from("orders")
+          .select("*, products(name)")
+          .eq("id", orderId)
+          .single();
+        
+        if (!order) throw new Error("Order not found");
+        
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("email")
+          .eq("user_id", order.user_id)
+          .single();
+        
+        if (!profile?.email) throw new Error("User email not found");
+        
+        const html = generateServiceSuspendedEmail(order, settings.from_name);
+        await sendEmail(settings, profile.email, "Service Suspended - Action Required", html);
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "service-terminated": {
+        const { data: order } = await supabase
+          .from("orders")
+          .select("*, products(name)")
+          .eq("id", orderId)
+          .single();
+        
+        if (!order) throw new Error("Order not found");
+        
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("email")
+          .eq("user_id", order.user_id)
+          .single();
+        
+        if (!profile?.email) throw new Error("User email not found");
+        
+        const html = generateServiceTerminatedEmail(order, settings.from_name);
+        await sendEmail(settings, profile.email, "Service Terminated", html);
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }
@@ -506,6 +556,128 @@ function generateRenewalReminderEmail(order: any, brandName: string): string {
         </div>
         <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
           ${brandName} • Keep your server running!
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generateServiceSuspendedEmail(order: any, brandName: string): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 60px; height: 60px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 30px;">⚠️</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px;">Service Suspended</h1>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Your service has been suspended. Your server is currently inaccessible.
+          </p>
+          
+          <div style="background: #fff7ed; border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #fed7aa;">
+            <h3 style="margin: 0 0 16px 0; color: #c2410c;">Service Information</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px 0; color: #ea580c;">Service</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #9a3412;">${order.products?.name || 'Server'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #ea580c;">Status</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #dc2626;">Suspended</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #ea580c;">Server ID</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #9a3412; font-family: monospace;">${order.server_id || 'N/A'}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <div style="background: #fef3c7; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #f59e0b;">
+            <p style="margin: 0; color: #92400e; font-size: 14px;">
+              <strong>💡 How to reactivate:</strong> Please pay any outstanding invoices or contact support if you believe this is an error.
+            </p>
+          </div>
+          
+          <div style="background: #fef2f2; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #ef4444;">
+            <p style="margin: 0; color: #991b1b; font-size: 14px;">
+              <strong>⚠️ Warning:</strong> Continued non-payment may result in permanent service termination and data loss.
+            </p>
+          </div>
+          
+          <a href="#" style="display: block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin-top: 24px;">
+            Pay Outstanding Balance
+          </a>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Need help? Contact support
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generateServiceTerminatedEmail(order: any, brandName: string): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 60px; height: 60px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 30px;">🚫</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px;">Service Terminated</h1>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Your service has been permanently terminated. All associated data has been deleted and cannot be recovered.
+          </p>
+          
+          <div style="background: #fef2f2; border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #fecaca;">
+            <h3 style="margin: 0 0 16px 0; color: #dc2626;">Terminated Service</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px 0; color: #991b1b;">Service</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #7f1d1d;">${order.products?.name || 'Server'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #991b1b;">Status</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #dc2626;">Terminated</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #991b1b;">Termination Date</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #7f1d1d;">${new Date().toLocaleDateString()}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <div style="background: #f0f9ff; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #0ea5e9;">
+            <p style="margin: 0; color: #0369a1; font-size: 14px;">
+              <strong>🔄 Want to come back?</strong> You can always start a new service with us. We'd love to have you back!
+            </p>
+          </div>
+          
+          <a href="#" style="display: block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin-top: 24px;">
+            Browse Our Services
+          </a>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Thank you for being a customer
         </p>
       </div>
     </body>

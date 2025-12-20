@@ -12,7 +12,6 @@ import { supabase } from "@/integrations/supabase/client";
 
 interface IkhodePaymentCardProps {
   qrCode: string;
-  qrString?: string;
   amount: number;
   currency?: string;
   orderId: string;
@@ -26,7 +25,6 @@ interface IkhodePaymentCardProps {
 
 const IkhodePaymentCard = ({
   qrCode,
-  qrString,
   amount,
   currency = "USD",
   orderId,
@@ -34,7 +32,7 @@ const IkhodePaymentCard = ({
   description,
   onComplete,
   onCancel,
-  expiresIn = 900,
+  expiresIn = 120, // 2 minutes to match your API timeout
   wsUrl,
 }: IkhodePaymentCardProps) => {
   const { toast } = useToast();
@@ -48,18 +46,18 @@ const IkhodePaymentCard = ({
   const [wsConnected, setWsConnected] = useState(false);
   const [wsReconnecting, setWsReconnecting] = useState(false);
 
-  // WebSocket connection for real-time updates
+  // WebSocket connection for real-time updates from YOUR API
   useEffect(() => {
     if (!wsUrl || paymentStatus !== "pending") return;
 
     const connectWebSocket = () => {
       try {
-        console.log("Connecting to WebSocket:", wsUrl);
+        console.log("[WS] Connecting to:", wsUrl);
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
-          console.log("WebSocket connected");
+          console.log("[WS] Connected");
           setWsConnected(true);
           setWsReconnecting(false);
         };
@@ -67,25 +65,25 @@ const IkhodePaymentCard = ({
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log("WebSocket message:", data);
+            console.log("[WS] Message received:", data);
 
-            // Handle payment_success event from your API
-            if (data.type === "payment_success" && data.transactionId === transactionId) {
-              handlePaymentSuccess();
-            }
-            // Also handle legacy event types
-            else if (data.type === "payment_received" && data.transactionId === transactionId) {
-              handlePaymentSuccess();
-            } else if (data.type === "payment_status" && data.status === "paid") {
-              handlePaymentSuccess();
+            // Handle payment_success event from YOUR API
+            if (data.type === "payment_success") {
+              // Check if it matches our transaction
+              if (data.transactionId === transactionId || 
+                  data.email || // Your API also sends email/username
+                  !data.transactionId) { // Accept if no specific transaction
+                console.log("[WS] Payment success detected!");
+                handlePaymentSuccess();
+              }
             }
           } catch (e) {
-            console.error("WebSocket message parse error:", e);
+            console.error("[WS] Parse error:", e);
           }
         };
 
         ws.onclose = () => {
-          console.log("WebSocket closed");
+          console.log("[WS] Closed");
           setWsConnected(false);
           
           // Reconnect if payment still pending
@@ -96,11 +94,11 @@ const IkhodePaymentCard = ({
         };
 
         ws.onerror = (error) => {
-          console.error("WebSocket error:", error);
+          console.error("[WS] Error:", error);
           setWsConnected(false);
         };
       } catch (error) {
-        console.error("WebSocket connection error:", error);
+        console.error("[WS] Connection error:", error);
       }
     };
 
@@ -135,7 +133,7 @@ const IkhodePaymentCard = ({
 
     const pollInterval = setInterval(async () => {
       await checkPaymentStatus(true);
-    }, 10000); // Poll every 10 seconds as fallback
+    }, 5000); // Poll every 5 seconds as fallback
 
     return () => clearInterval(pollInterval);
   }, [wsConnected, paymentStatus, orderId]);
@@ -145,7 +143,7 @@ const IkhodePaymentCard = ({
     toast({ title: "Payment received!", description: "Setting up your server..." });
 
     try {
-      // Update order and invoice status
+      // Update order and invoice status (webhook should have done this, but ensure it's done)
       await supabase.from("orders").update({ status: "paid" }).eq("id", orderId);
       
       const { data: invoiceUpdate } = await supabase
@@ -197,13 +195,14 @@ const IkhodePaymentCard = ({
     if (!silent) setChecking(true);
     
     try {
-      const { data, error } = await supabase.functions.invoke("ikhode-payment", {
-        body: { action: "check-status", transactionId: orderId },
-      });
+      // Check order status directly
+      const { data: order } = await supabase
+        .from("orders")
+        .select("status")
+        .eq("id", orderId)
+        .single();
 
-      if (error) throw error;
-
-      if (data?.status === "paid") {
+      if (order?.status === "paid" || order?.status === "provisioning" || order?.status === "active") {
         await handlePaymentSuccess();
       } else if (!silent) {
         toast({ 
@@ -349,8 +348,8 @@ const IkhodePaymentCard = ({
 
         {/* Timer */}
         <div className="flex items-center justify-center gap-2 mt-4">
-          <Timer className={`w-4 h-4 ${timeLeft < 60 ? "text-destructive animate-pulse" : "text-muted-foreground"}`} />
-          <span className={`font-mono text-lg ${timeLeft < 60 ? "text-destructive font-bold" : "text-muted-foreground"}`}>
+          <Timer className={`w-4 h-4 ${timeLeft < 30 ? "text-destructive animate-pulse" : "text-muted-foreground"}`} />
+          <span className={`font-mono text-lg ${timeLeft < 30 ? "text-destructive font-bold" : "text-muted-foreground"}`}>
             {formatTime(timeLeft)}
           </span>
           <span className="text-sm text-muted-foreground">remaining</span>

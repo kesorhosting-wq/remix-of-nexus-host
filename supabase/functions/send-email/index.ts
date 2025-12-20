@@ -233,6 +233,31 @@ serve(async (req) => {
         });
       }
 
+      case "service-reactivated": {
+        const { data: order } = await supabase
+          .from("orders")
+          .select("*, products(name)")
+          .eq("id", orderId)
+          .single();
+        
+        if (!order) throw new Error("Order not found");
+        
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("email")
+          .eq("user_id", order.user_id)
+          .single();
+        
+        if (!profile?.email) throw new Error("User email not found");
+        
+        const html = generateServiceReactivatedEmail(order, settings.from_name);
+        await sendEmail(settings, profile.email, "Service Reactivated - Welcome Back!", html);
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }
@@ -678,6 +703,64 @@ function generateServiceTerminatedEmail(order: any, brandName: string): string {
         </div>
         <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
           ${brandName} • Thank you for being a customer
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generateServiceReactivatedEmail(order: any, brandName: string): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 60px; height: 60px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 30px;">🎉</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px;">Service Reactivated!</h1>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Great news! Your service has been reactivated and is now fully operational. Welcome back!
+          </p>
+          
+          <div style="background: #f0fdf4; border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #bbf7d0;">
+            <h3 style="margin: 0 0 16px 0; color: #16a34a;">Service Information</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px 0; color: #15803d;">Service</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #166534;">${order.products?.name || 'Server'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #15803d;">Status</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #22c55e;">Active ✓</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #15803d;">Server ID</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #166534; font-family: monospace;">${order.server_id || 'N/A'}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <div style="background: #f0f9ff; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #0ea5e9;">
+            <p style="margin: 0; color: #0369a1; font-size: 14px;">
+              <strong>🚀 Your server is ready!</strong> You can now access your server and all its features.
+            </p>
+          </div>
+          
+          <a href="#" style="display: block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin-top: 24px;">
+            Access Control Panel
+          </a>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Thank you for your continued support
         </p>
       </div>
     </body>

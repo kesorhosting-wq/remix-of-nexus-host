@@ -126,6 +126,7 @@ const AdminDashboard = () => {
   const [suspendingOrder, setSuspendingOrder] = useState<string | null>(null);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  const [orderStatusFilter, setOrderStatusFilter] = useState<string>("all");
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -256,6 +257,16 @@ const AdminDashboard = () => {
           }
         } catch (err) {
           console.error("Panel unsuspend error:", err);
+        }
+        
+        // Send reactivation email notification
+        try {
+          await supabase.functions.invoke("send-email", {
+            body: { action: "service-reactivated", orderId }
+          });
+          console.log("Reactivation email sent");
+        } catch (emailErr) {
+          console.error("Failed to send reactivation email:", emailErr);
         }
       }
 
@@ -706,14 +717,27 @@ const AdminDashboard = () => {
           <TabsContent value="orders">
             <Card>
               <CardHeader>
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center flex-wrap gap-4">
                   <div className="flex items-center gap-4">
                     <CardTitle>All Orders</CardTitle>
                     {selectedOrders.size > 0 && (
                       <Badge variant="secondary">{selectedOrders.size} selected</Badge>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Select value={orderStatusFilter} onValueChange={setOrderStatusFilter}>
+                      <SelectTrigger className="w-32 h-8">
+                        <SelectValue placeholder="Filter" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="paid">Paid</SelectItem>
+                        <SelectItem value="suspended">Suspended</SelectItem>
+                        <SelectItem value="cancelled">Cancelled</SelectItem>
+                      </SelectContent>
+                    </Select>
                     {selectedOrders.size > 0 && (
                       <>
                         <AlertDialog>
@@ -803,7 +827,9 @@ const AdminDashboard = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {orders.map((order) => (
+                    {orders
+                      .filter(order => orderStatusFilter === "all" || order.status === orderStatusFilter)
+                      .map((order) => (
                       <TableRow key={order.id} className={selectedOrders.has(order.id) ? "bg-muted/50" : ""}>
                         <TableCell>
                           <Checkbox 

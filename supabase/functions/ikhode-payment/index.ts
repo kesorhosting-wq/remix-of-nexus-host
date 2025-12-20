@@ -17,34 +17,46 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Get Ikhode API URL from payment_gateways
+    // Get Ikhode API config from payment_gateways
     const { data: gateway, error: gatewayError } = await supabase
       .from("payment_gateways")
       .select("config, enabled")
       .eq("slug", "ikhode-bakong")
-      .single();
+      .maybeSingle();
 
-    if (gatewayError || !gateway) {
-      console.error("Ikhode gateway not configured:", gatewayError);
+    if (gatewayError) {
+      console.error("Error fetching gateway config:", gatewayError);
       return new Response(
-        JSON.stringify({ error: "Ikhode Payment API not configured" }),
+        JSON.stringify({ error: "Failed to fetch payment gateway config" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!gateway) {
+      return new Response(
+        JSON.stringify({ error: "Ikhode Payment gateway not configured. Please add it in admin settings." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (!gateway.enabled) {
       return new Response(
-        JSON.stringify({ error: "Ikhode Payment API is disabled" }),
+        JSON.stringify({ error: "Ikhode Payment gateway is disabled" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const config = gateway.config as { apiUrl: string; wsEnabled: boolean };
-    const apiUrl = config.apiUrl;
+    const config = gateway.config as { 
+      apiUrl: string; 
+      wsPort?: number;
+      webhookSecret?: string;
+    };
+    
+    const apiUrl = config.apiUrl?.replace(/\/$/, ""); // Remove trailing slash
 
     if (!apiUrl) {
       return new Response(
-        JSON.stringify({ error: "Ikhode Payment API URL not set" }),
+        JSON.stringify({ error: "Ikhode Payment API URL not configured" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -56,76 +68,100 @@ serve(async (req) => {
 
     switch (action) {
       case "generate-khqr": {
-        const { accountId, merchantName, merchantCity, amount, currency, transactionId } = params;
+        const { amount, orderId, email, username, invoiceId } = params;
 
-        const response = await fetch(`${apiUrl}/api/v1/generate-khqr`, {
+        // Build the callback URL for the webhook
+        const callbackUrl = `${supabaseUrl}/functions/v1/ikhode-webhook`;
+        const webhookSecret = config.webhookSecret || Deno.env.get("IKHODE_WEBHOOK_SECRET") || "";
+
+        // Generate a transaction ID
+        const transactionId = `TXN-${orderId.slice(0, 8)}-${Date.now()}`;
+
+        console.log(`Generating KHQR for amount: ${amount}, transactionId: ${transactionId}`);
+        console.log(`Calling API: ${apiUrl}/generate-khqr`);
+
+        const response = await fetch(`${apiUrl}/generate-khqr`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            accountId,
-            merchantName,
-            merchantCity,
-            amount,
-            currency: currency || "USD",
+            amount: Number(amount),
             transactionId,
+            email: email || "",
+            username: username || "",
+            callbackUrl,
+            secret: webhookSecret,
           }),
         });
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error("Ikhode API error:", errorText);
-          throw new Error(`API error: ${response.status}`);
+          console.error("Ikhode API error:", response.status, errorText);
+          throw new Error(`API error: ${response.status} - ${errorText}`);
         }
 
         const data = await response.json();
-        console.log("KHQR generated:", data);
+        console.log("KHQR generated successfully:", { transactionId, hasQrCode: !!data.qrCodeData });
 
-        return new Response(JSON.stringify(data), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+        // Store the transaction reference in the order
+        await supabase
+          .from("orders")
+          .update({ 
+            notes: `Transaction ID: ${transactionId}`,
+            server_details: {
+              ...((await supabase.from("orders").select("server_details").eq("id", orderId).single()).data?.server_details || {}),
+              paymentTransactionId: transactionId,
+            }
+          })
+          .eq("id", orderId);
 
-      case "get-banks": {
-        const response = await fetch(`${apiUrl}/api/v1/banks`);
-        
-        if (!response.ok) {
-          throw new Error(`API error: ${response.status}`);
-        }
-
-        const banks = await response.json();
-        
-        return new Response(JSON.stringify({ banks }), {
+        return new Response(JSON.stringify({
+          qrCodeData: data.qrCodeData,
+          transactionId,
+          amount,
+        }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
       case "check-status": {
-        const { transactionId } = params;
+        const { transactionId, orderId } = params;
         
-        // Check payment status - the Ikhode API may have different endpoints
-        // For now, we check the order status in our database
+        // Check payment status in our database
         const { data: order } = await supabase
           .from("orders")
-          .select("status")
-          .eq("id", transactionId)
-          .single();
+          .select("status, notes")
+          .eq("id", orderId || transactionId)
+          .maybeSingle();
 
         return new Response(
           JSON.stringify({ 
             status: order?.status || "pending",
-            transactionId 
+            transactionId: transactionId || orderId,
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
       case "get-config": {
-        // Return the WebSocket URL and config for client-side connection
+        // Build WebSocket URL from API URL
+        const wsPort = config.wsPort || 8080;
+        let wsUrl = "";
+        
+        if (apiUrl) {
+          try {
+            const url = new URL(apiUrl);
+            const wsProtocol = url.protocol === "https:" ? "wss:" : "ws:";
+            wsUrl = `${wsProtocol}//${url.hostname}:${wsPort}`;
+          } catch (e) {
+            console.error("Error parsing API URL for WebSocket:", e);
+          }
+        }
+
         return new Response(
           JSON.stringify({
             apiUrl,
-            wsUrl: apiUrl.replace("http", "ws"),
-            wsEnabled: config.wsEnabled,
+            wsUrl,
+            wsEnabled: !!wsUrl,
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );

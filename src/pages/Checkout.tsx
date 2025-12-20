@@ -164,11 +164,13 @@ const Checkout = () => {
         const result = await generateKHQR(
           plan.price,
           order.id,
-          `${game?.name || "Game"} Server - ${plan.name}`
+          user?.email,
+          user?.email?.split("@")[0],
+          invoice.id
         );
 
         if (result) {
-          setQrCode(result.qrCode);
+          setQrCode(result.qrCodeData);
           setTransactionId(result.transactionId);
           setWsUrl(getWebSocketUrl());
           toast({ title: "Order created! Scan QR to pay." });

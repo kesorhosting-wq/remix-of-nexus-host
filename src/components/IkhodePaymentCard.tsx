@@ -62,12 +62,6 @@ const IkhodePaymentCard = ({
           console.log("WebSocket connected");
           setWsConnected(true);
           setWsReconnecting(false);
-          
-          // Subscribe to transaction updates
-          ws.send(JSON.stringify({
-            type: "subscribe",
-            transactionId,
-          }));
         };
 
         ws.onmessage = (event) => {
@@ -75,7 +69,12 @@ const IkhodePaymentCard = ({
             const data = JSON.parse(event.data);
             console.log("WebSocket message:", data);
 
-            if (data.type === "payment_received" && data.transactionId === transactionId) {
+            // Handle payment_success event from your API
+            if (data.type === "payment_success" && data.transactionId === transactionId) {
+              handlePaymentSuccess();
+            }
+            // Also handle legacy event types
+            else if (data.type === "payment_received" && data.transactionId === transactionId) {
               handlePaymentSuccess();
             } else if (data.type === "payment_status" && data.status === "paid") {
               handlePaymentSuccess();
@@ -322,7 +321,7 @@ const IkhodePaymentCard = ({
           
           <div className={`p-4 bg-white rounded-2xl shadow-lg transition-all ${isExpired ? "opacity-50 grayscale" : ""}`}>
             <img
-              src={qrCode.startsWith("data:") ? qrCode : `data:image/png;base64,${qrCode}`}
+              src={qrCode}
               alt="KHQR Payment Code"
               className="w-56 h-56 sm:w-64 sm:h-64"
             />

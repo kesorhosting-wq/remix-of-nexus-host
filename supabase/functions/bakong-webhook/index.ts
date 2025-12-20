@@ -6,9 +6,49 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const BAKONG_API_KEY = Deno.env.get("BAKONG_API_KEY");
+const BAKONG_WEBHOOK_SECRET = Deno.env.get("BAKONG_WEBHOOK_SECRET");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+// Constant-time string comparison to prevent timing attacks
+function secureCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+// Convert ArrayBuffer to hex string
+function arrayBufferToHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// Verify webhook signature using HMAC-SHA256
+async function verifySignature(payload: string, signature: string, secret: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  
+  const signatureBuffer = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode(payload)
+  );
+  
+  const expectedSignature = arrayBufferToHex(signatureBuffer);
+  return secureCompare(expectedSignature, signature.toLowerCase());
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -18,21 +58,76 @@ serve(async (req) => {
   const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 
   try {
-    const payload = await req.json();
-    console.log("Received Bakong webhook:", JSON.stringify(payload));
+    // Read raw body for signature verification
+    const rawBody = await req.text();
+    console.log("Received Bakong webhook request");
 
-    // Verify webhook signature if provided
+    // Get signature from header
     const signature = req.headers.get("x-bakong-signature");
-    if (signature && BAKONG_API_KEY) {
-      // Verify signature matches expected format
-      // Implementation depends on Bakong's specific signature method
-      console.log("Webhook signature received:", signature);
+    
+    // Verify webhook signature - REQUIRED for security
+    if (!BAKONG_WEBHOOK_SECRET) {
+      console.error("BAKONG_WEBHOOK_SECRET not configured");
+      return new Response(
+        JSON.stringify({ error: "Webhook secret not configured" }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
     }
 
-    const { transactionId, status, amount, currency, reference } = payload;
+    if (!signature) {
+      console.error("Missing webhook signature");
+      return new Response(
+        JSON.stringify({ error: "Missing signature" }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const isValidSignature = await verifySignature(rawBody, signature, BAKONG_WEBHOOK_SECRET);
+    if (!isValidSignature) {
+      console.error("Invalid webhook signature - potential forged request");
+      return new Response(
+        JSON.stringify({ error: "Invalid signature" }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    console.log("Webhook signature verified successfully");
+
+    // Parse payload after signature verification
+    const payload = JSON.parse(rawBody);
+    console.log("Received Bakong webhook:", JSON.stringify(payload));
+
+    const { transactionId, status, amount, currency, reference, timestamp } = payload;
 
     if (!transactionId) {
       throw new Error("Missing transactionId in webhook payload");
+    }
+
+    // Optional: Check timestamp to prevent replay attacks (within 5 minutes)
+    if (timestamp) {
+      const webhookTime = new Date(timestamp).getTime();
+      const now = Date.now();
+      const fiveMinutes = 5 * 60 * 1000;
+      
+      if (Math.abs(now - webhookTime) > fiveMinutes) {
+        console.error("Webhook timestamp too old - potential replay attack");
+        return new Response(
+          JSON.stringify({ error: "Webhook expired" }),
+          {
+            status: 401,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
     }
 
     // Find the order by transaction ID
@@ -124,7 +219,7 @@ serve(async (req) => {
   } catch (error: any) {
     console.error("Webhook error:", error);
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: "Internal server error" }),
       {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },

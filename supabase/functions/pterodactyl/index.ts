@@ -9,19 +9,16 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-async function getPterodactylConfig(supabase: any) {
-  const { data, error } = await supabase
-    .from("server_integrations")
-    .select("*")
-    .eq("type", "pterodactyl")
-    .eq("enabled", true)
-    .single();
-  
-  if (error || !data) {
-    throw new Error("Pterodactyl panel not configured");
+// Use environment variables for Pterodactyl credentials (more secure than database storage)
+const PTERODACTYL_API_URL = Deno.env.get("PTERODACTYL_API_URL");
+const PTERODACTYL_API_KEY = Deno.env.get("PTERODACTYL_API_KEY");
+
+function getPterodactylConfig() {
+  if (!PTERODACTYL_API_URL || !PTERODACTYL_API_KEY) {
+    throw new Error("Pterodactyl panel not configured. Please set PTERODACTYL_API_URL and PTERODACTYL_API_KEY secrets.");
   }
   
-  return { apiUrl: data.api_url, apiKey: data.api_key };
+  return { apiUrl: PTERODACTYL_API_URL, apiKey: PTERODACTYL_API_KEY };
 }
 
 serve(async (req) => {
@@ -37,19 +34,19 @@ serve(async (req) => {
 
     console.log(`Pterodactyl action: ${action}`);
 
-    // For test action, use provided credentials
+    // For test action, use provided credentials (admin testing before saving)
     if (action === "test") {
       return await handleTestConnection(testApiUrl, testApiKey, corsHeaders);
     }
 
-    // For get-panel-data, fetch nests/nodes/eggs
+    // For get-panel-data, use secure config
     if (action === "get-panel-data") {
-      const config = await getPterodactylConfig(supabase);
+      const config = getPterodactylConfig();
       return await handleGetPanelData(config.apiUrl, config.apiKey, corsHeaders);
     }
 
-    // Get config from database for all other actions
-    const config = await getPterodactylConfig(supabase);
+    // Get config from environment variables for all other actions
+    const config = getPterodactylConfig();
     const apiHeaders = {
       "Authorization": `Bearer ${config.apiKey}`,
       "Content-Type": "application/json",
@@ -508,37 +505,34 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
 }
 
 async function sendPowerSignal(apiUrl: string, apiKey: string, serverId: string, signal: string) {
-  // First get server details using external ID
+  console.log(`Sending power signal '${signal}' to server ${serverId}`);
+
+  // First, get the internal server ID from the identifier
   const headers = {
     "Authorization": `Bearer ${apiKey}`,
     "Content-Type": "application/json",
     "Accept": "application/json",
   };
-  
+
+  // Get server by external ID
   const serverResponse = await fetch(
     `${apiUrl}/api/application/servers/external/${serverId}`,
     { headers }
   );
 
   if (!serverResponse.ok) {
-    throw new Error("Server not found");
+    throw new Error(`Server not found: ${serverId}`);
   }
 
   const serverData = await serverResponse.json();
-  const serverUuid = serverData.attributes.uuid;
-  
-  // Use client API for power signals
-  const clientHeaders = {
-    "Authorization": `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-  };
-  
+  const internalId = serverData.attributes.id;
+
+  // Send power signal using client API
   const powerResponse = await fetch(
-    `${apiUrl}/api/client/servers/${serverUuid}/power`,
+    `${apiUrl}/api/client/servers/${serverId}/power`,
     {
       method: "POST",
-      headers: clientHeaders,
+      headers,
       body: JSON.stringify({ signal }),
     }
   );
@@ -546,11 +540,10 @@ async function sendPowerSignal(apiUrl: string, apiKey: string, serverId: string,
   if (!powerResponse.ok) {
     const errorText = await powerResponse.text();
     console.error("Power signal error:", errorText);
-    throw new Error(`Failed to send ${signal} signal`);
+    throw new Error(`Failed to send power signal: ${powerResponse.statusText}`);
   }
 
-  console.log(`Power signal ${signal} sent to server ${serverId}`);
-  return { success: true, message: `Server ${signal} signal sent` };
+  return { success: true, signal, serverId };
 }
 
 async function suspendServer(apiUrl: string, headers: Record<string, string>, serverId: string) {
@@ -560,7 +553,7 @@ async function suspendServer(apiUrl: string, headers: Record<string, string>, se
   );
 
   if (!serverResponse.ok) {
-    throw new Error("Server not found");
+    throw new Error(`Server not found: ${serverId}`);
   }
 
   const serverData = await serverResponse.json();
@@ -572,11 +565,10 @@ async function suspendServer(apiUrl: string, headers: Record<string, string>, se
   );
 
   if (!response.ok) {
-    throw new Error("Failed to suspend server");
+    throw new Error(`Failed to suspend server: ${response.statusText}`);
   }
 
-  console.log("Server suspended:", serverId);
-  return { success: true, message: "Server suspended" };
+  return { success: true, action: "suspended", serverId };
 }
 
 async function unsuspendServer(apiUrl: string, headers: Record<string, string>, serverId: string) {
@@ -586,7 +578,7 @@ async function unsuspendServer(apiUrl: string, headers: Record<string, string>, 
   );
 
   if (!serverResponse.ok) {
-    throw new Error("Server not found");
+    throw new Error(`Server not found: ${serverId}`);
   }
 
   const serverData = await serverResponse.json();
@@ -598,11 +590,10 @@ async function unsuspendServer(apiUrl: string, headers: Record<string, string>, 
   );
 
   if (!response.ok) {
-    throw new Error("Failed to unsuspend server");
+    throw new Error(`Failed to unsuspend server: ${response.statusText}`);
   }
 
-  console.log("Server unsuspended:", serverId);
-  return { success: true, message: "Server unsuspended" };
+  return { success: true, action: "unsuspended", serverId };
 }
 
 async function terminateServer(apiUrl: string, headers: Record<string, string>, serverId: string) {
@@ -612,7 +603,7 @@ async function terminateServer(apiUrl: string, headers: Record<string, string>, 
   );
 
   if (!serverResponse.ok) {
-    throw new Error("Server not found");
+    throw new Error(`Server not found: ${serverId}`);
   }
 
   const serverData = await serverResponse.json();
@@ -624,39 +615,32 @@ async function terminateServer(apiUrl: string, headers: Record<string, string>, 
   );
 
   if (!response.ok) {
-    throw new Error("Failed to terminate server");
+    throw new Error(`Failed to terminate server: ${response.statusText}`);
   }
 
-  console.log("Server terminated:", serverId);
-  return { success: true, message: "Server terminated" };
+  return { success: true, action: "terminated", serverId };
 }
 
 async function getServerStatus(apiUrl: string, headers: Record<string, string>, serverId: string) {
-  const response = await fetch(
-    `${apiUrl}/api/application/servers/external/${serverId}`,
+  const serverResponse = await fetch(
+    `${apiUrl}/api/client/servers/${serverId}/resources`,
     { headers }
   );
 
-  if (!response.ok) {
-    throw new Error("Server not found");
+  if (!serverResponse.ok) {
+    throw new Error(`Failed to get server status: ${serverResponse.statusText}`);
   }
 
-  const serverData = await response.json();
-
+  const data = await serverResponse.json();
   return {
     success: true,
-    server: {
-      id: serverData.attributes.identifier,
-      name: serverData.attributes.name,
-      status: serverData.attributes.status,
-      suspended: serverData.attributes.suspended,
-      limits: serverData.attributes.limits,
-    },
+    status: data.attributes.current_state,
+    resources: data.attributes.resources,
   };
 }
 
 function generatePassword(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%";
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
   let password = "";
   for (let i = 0; i < 16; i++) {
     password += chars.charAt(Math.floor(Math.random() * chars.length));

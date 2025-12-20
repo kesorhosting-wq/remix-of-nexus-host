@@ -18,7 +18,22 @@ function getPterodactylConfig() {
     throw new Error("Pterodactyl panel not configured. Please set PTERODACTYL_API_URL and PTERODACTYL_API_KEY secrets.");
   }
   
-  return { apiUrl: PTERODACTYL_API_URL, apiKey: PTERODACTYL_API_KEY };
+  // Normalize URL: remove trailing slash and ensure no /api path is included
+  let normalizedUrl = PTERODACTYL_API_URL.trim();
+  // Remove trailing slashes
+  while (normalizedUrl.endsWith('/')) {
+    normalizedUrl = normalizedUrl.slice(0, -1);
+  }
+  // Remove /api or /api/application if accidentally included
+  if (normalizedUrl.endsWith('/api/application')) {
+    normalizedUrl = normalizedUrl.replace(/\/api\/application$/, '');
+  } else if (normalizedUrl.endsWith('/api')) {
+    normalizedUrl = normalizedUrl.replace(/\/api$/, '');
+  }
+  
+  console.log(`Pterodactyl API URL (normalized): ${normalizedUrl}`);
+  
+  return { apiUrl: normalizedUrl, apiKey: PTERODACTYL_API_KEY };
 }
 
 serve(async (req) => {

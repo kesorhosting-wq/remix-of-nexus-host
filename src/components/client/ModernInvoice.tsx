@@ -438,9 +438,22 @@ const ModernInvoice = ({ invoice, onClose, onPay }: ModernInvoiceProps) => {
                 )}
               </div>
 
-              <p className="text-xs text-muted-foreground mt-3 text-center">
-                ⚠️ Please save these credentials securely. The password will not be shown again.
-              </p>
+              <div className="flex items-center justify-between mt-4 pt-3 border-t border-primary/20">
+                <p className="text-xs text-muted-foreground">
+                  ⚠️ Save these credentials securely. Password won't be shown again.
+                </p>
+                {serverDetails.panel_url && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => window.open(`${serverDetails.panel_url}/account`, '_blank')}
+                  >
+                    <Key className="w-3 h-3" />
+                    Change Password
+                  </Button>
+                )}
+              </div>
             </div>
           )}
 

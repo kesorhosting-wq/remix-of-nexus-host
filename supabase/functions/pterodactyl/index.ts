@@ -299,15 +299,42 @@ async function createServer(
     isNew: true,
   } : null;
 
-  // Use plan config or defaults
+  // Use customer-selected nest/egg from order, or fall back to plan config, or defaults
   const serverName = firstItem.server_name || firstItem.name || `Server-${orderId.slice(0, 8)}`;
-  const eggId = planConfig?.pterodactyl_egg_id || 1;
-  const nestId = planConfig?.pterodactyl_nest_id || 1;
+  // Priority: customer selection > plan config > default
+  const eggId = firstItem.pterodactyl_egg_id || planConfig?.pterodactyl_egg_id || 1;
+  const nestId = firstItem.pterodactyl_nest_id || planConfig?.pterodactyl_nest_id || 1;
   const limits = planConfig?.pterodactyl_limits || { memory: 1024, swap: 0, disk: 10240, io: 500, cpu: 100 };
   const featureLimits = planConfig?.pterodactyl_feature_limits || { databases: 1, backups: 2, allocations: 1 };
-  const dockerImage = planConfig?.pterodactyl_docker_image || "ghcr.io/pterodactyl/yolks:java_17";
-  const startup = planConfig?.pterodactyl_startup || "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}";
-  const environment = planConfig?.pterodactyl_environment || {};
+  
+  // Fetch egg details to get docker_image and startup command for customer-selected egg
+  let dockerImage = planConfig?.pterodactyl_docker_image || "ghcr.io/pterodactyl/yolks:java_17";
+  let startup = planConfig?.pterodactyl_startup || "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}";
+  let environment = planConfig?.pterodactyl_environment || {};
+  
+  // If customer selected a different egg, fetch its details
+  if (firstItem.pterodactyl_egg_id) {
+    console.log(`Customer selected egg ${eggId} from nest ${nestId}, fetching egg details...`);
+    try {
+      const eggRes = await fetch(`${apiUrl}/api/application/nests/${nestId}/eggs/${eggId}?include=variables`, { headers });
+      if (eggRes.ok) {
+        const eggData = await eggRes.json();
+        dockerImage = eggData.attributes.docker_image || dockerImage;
+        startup = eggData.attributes.startup || startup;
+        
+        // Build environment from egg variables
+        const eggVars = eggData.attributes.relationships?.variables?.data || [];
+        const eggEnvironment: Record<string, string> = {};
+        for (const v of eggVars) {
+          eggEnvironment[v.attributes.env_variable] = v.attributes.default_value || "";
+        }
+        environment = { ...eggEnvironment, ...environment };
+        console.log(`Egg ${eggId} details loaded: docker=${dockerImage}`);
+      }
+    } catch (err) {
+      console.error("Failed to fetch egg details, using defaults:", err);
+    }
+  }
 
   // Find available allocation
   const allocation = await findAvailableAllocation(apiUrl, headers, planConfig?.pterodactyl_node_id);

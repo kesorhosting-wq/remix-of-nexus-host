@@ -868,6 +868,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      sync_profiles_with_auth_users: { Args: never; Returns: undefined }
     }
     Enums: {
       app_role: "admin" | "user"

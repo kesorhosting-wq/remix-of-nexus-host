@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.renewal-reminder]
 verify_jwt = false
+
+[functions.ikhode-payment]
+verify_jwt = false

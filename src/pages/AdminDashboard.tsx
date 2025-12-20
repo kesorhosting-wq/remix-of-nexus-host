@@ -13,8 +13,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { 
   Shield, Home, LogOut, Package, FileText, MessageSquare, 
   DollarSign, Users, Server, Eye, Send, RefreshCw, Loader2,
-  CheckCircle, XCircle, Clock, AlertCircle, CreditCard, Trash2
+  CheckCircle, XCircle, Clock, AlertCircle, CreditCard, Trash2, Pause, SquareCheck
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -123,6 +124,8 @@ const AdminDashboard = () => {
   const [updatingPayment, setUpdatingPayment] = useState<string | null>(null);
   const [deletingOrder, setDeletingOrder] = useState<string | null>(null);
   const [suspendingOrder, setSuspendingOrder] = useState<string | null>(null);
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -314,6 +317,122 @@ const AdminDashboard = () => {
       toast({ title: "Failed to delete service", description: error.message, variant: "destructive" });
     } finally {
       setDeletingOrder(null);
+    }
+  };
+
+  // Bulk selection handlers
+  const toggleOrderSelection = (orderId: string) => {
+    setSelectedOrders(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(orderId)) {
+        newSet.delete(orderId);
+      } else {
+        newSet.add(orderId);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedOrders.size === orders.length) {
+      setSelectedOrders(new Set());
+    } else {
+      setSelectedOrders(new Set(orders.map(o => o.id)));
+    }
+  };
+
+  const handleBulkSuspend = async () => {
+    if (selectedOrders.size === 0) return;
+    setBulkActionLoading(true);
+    
+    try {
+      const selectedOrdersList = orders.filter(o => selectedOrders.has(o.id));
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const order of selectedOrdersList) {
+        try {
+          // Suspend in Pterodactyl if server exists
+          if (order.server_id) {
+            await supabase.functions.invoke("pterodactyl", {
+              body: { action: "suspend", serverId: order.server_id }
+            });
+          }
+          
+          // Update status in database
+          await supabase.from("orders").update({ status: "suspended" }).eq("id", order.id);
+          
+          // Send suspension email
+          await supabase.functions.invoke("send-email", {
+            body: { action: "service-suspended", orderId: order.id }
+          });
+          
+          successCount++;
+        } catch (err) {
+          console.error(`Failed to suspend order ${order.id}:`, err);
+          failCount++;
+        }
+      }
+
+      toast({ 
+        title: `Bulk suspend complete`, 
+        description: `${successCount} suspended, ${failCount} failed` 
+      });
+      setSelectedOrders(new Set());
+      fetchData();
+    } catch (error: any) {
+      toast({ title: "Bulk suspend failed", variant: "destructive" });
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedOrders.size === 0) return;
+    setBulkActionLoading(true);
+    
+    try {
+      const selectedOrdersList = orders.filter(o => selectedOrders.has(o.id));
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const order of selectedOrdersList) {
+        try {
+          // Send termination email
+          await supabase.functions.invoke("send-email", {
+            body: { action: "service-terminated", orderId: order.id }
+          });
+
+          // Terminate in Pterodactyl if server exists
+          if (order.server_id) {
+            await supabase.functions.invoke("pterodactyl", {
+              body: { action: "terminate", serverId: order.server_id }
+            });
+          }
+
+          // Delete related invoices
+          await supabase.from("invoices").delete().eq("order_id", order.id);
+
+          // Delete the order
+          await supabase.from("orders").delete().eq("id", order.id);
+          
+          successCount++;
+        } catch (err) {
+          console.error(`Failed to delete order ${order.id}:`, err);
+          failCount++;
+        }
+      }
+
+      toast({ 
+        title: `Bulk delete complete`, 
+        description: `${successCount} deleted, ${failCount} failed` 
+      });
+      setSelectedOrders(new Set());
+      fetchData();
+    } catch (error: any) {
+      toast({ title: "Bulk delete failed", variant: "destructive" });
+    } finally {
+      setBulkActionLoading(false);
     }
   };
 
@@ -588,16 +707,92 @@ const AdminDashboard = () => {
             <Card>
               <CardHeader>
                 <div className="flex justify-between items-center">
-                  <CardTitle>All Orders</CardTitle>
-                  <Button variant="outline" size="sm" onClick={fetchData}>
-                    <RefreshCw className="w-4 h-4" />
-                  </Button>
+                  <div className="flex items-center gap-4">
+                    <CardTitle>All Orders</CardTitle>
+                    {selectedOrders.size > 0 && (
+                      <Badge variant="secondary">{selectedOrders.size} selected</Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {selectedOrders.size > 0 && (
+                      <>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="outline" size="sm" disabled={bulkActionLoading}>
+                              {bulkActionLoading ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Pause className="w-4 h-4 mr-1" />}
+                              Suspend ({selectedOrders.size})
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Bulk Suspend Services</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to suspend {selectedOrders.size} service(s)? This will:
+                                <ul className="list-disc list-inside mt-2 space-y-1">
+                                  <li>Suspend servers in Pterodactyl panel</li>
+                                  <li>Send suspension emails to customers</li>
+                                  <li>Update order status to suspended</li>
+                                </ul>
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction onClick={handleBulkSuspend}>
+                                Suspend All
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="destructive" size="sm" disabled={bulkActionLoading}>
+                              {bulkActionLoading ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Trash2 className="w-4 h-4 mr-1" />}
+                              Delete ({selectedOrders.size})
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Bulk Delete Services</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to delete {selectedOrders.size} service(s)? This will:
+                                <ul className="list-disc list-inside mt-2 space-y-1">
+                                  <li>Terminate servers in Pterodactyl panel</li>
+                                  <li>Send termination emails to customers</li>
+                                  <li>Delete all related invoices</li>
+                                  <li>Permanently remove the orders</li>
+                                </ul>
+                                <p className="mt-2 font-semibold text-destructive">This action cannot be undone.</p>
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction 
+                                onClick={handleBulkDelete}
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              >
+                                Delete All
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </>
+                    )}
+                    <Button variant="outline" size="sm" onClick={fetchData}>
+                      <RefreshCw className="w-4 h-4" />
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10">
+                        <Checkbox 
+                          checked={orders.length > 0 && selectedOrders.size === orders.length}
+                          onCheckedChange={toggleSelectAll}
+                        />
+                      </TableHead>
                       <TableHead>ID</TableHead>
                       <TableHead>Customer</TableHead>
                       <TableHead>Server</TableHead>
@@ -609,7 +804,13 @@ const AdminDashboard = () => {
                   </TableHeader>
                   <TableBody>
                     {orders.map((order) => (
-                      <TableRow key={order.id}>
+                      <TableRow key={order.id} className={selectedOrders.has(order.id) ? "bg-muted/50" : ""}>
+                        <TableCell>
+                          <Checkbox 
+                            checked={selectedOrders.has(order.id)}
+                            onCheckedChange={() => toggleOrderSelection(order.id)}
+                          />
+                        </TableCell>
                         <TableCell className="font-mono text-xs">{order.id.slice(0, 8)}</TableCell>
                         <TableCell>{order.user_email || "N/A"}</TableCell>
                         <TableCell>{order.server_details?.name || "N/A"}</TableCell>

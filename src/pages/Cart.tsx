@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import abaPaywayIcon from "@/assets/aba-payway.svg";
 import { useNavigate } from "react-router-dom";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
@@ -290,8 +291,8 @@ const Cart = () => {
                     <Label className="text-sm font-medium">Payment Method</Label>
                     {/* ABA PayWay Payment */}
                     <div className="flex items-center gap-3 p-3 rounded-lg border border-primary bg-primary/5">
-                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
-                        <Wallet className="w-5 h-5 text-white" />
+                      <div className="w-10 h-10 rounded-lg bg-white flex items-center justify-center p-1">
+                        <img src={abaPaywayIcon} alt="ABA PayWay" className="w-full h-full object-contain" />
                       </div>
                       <div className="flex-1">
                         <p className="font-medium text-sm flex items-center gap-2">

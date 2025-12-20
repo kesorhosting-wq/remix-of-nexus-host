@@ -10,14 +10,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Trash2, ShoppingCart, ArrowRight, Loader2, Wallet, Zap } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Trash2, ShoppingCart, ArrowRight, Loader2, Zap } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import IkhodePaymentCard from "@/components/IkhodePaymentCard";
 import { useIkhodePayment } from "@/hooks/useIkhodePayment";
+import { usePterodactylData } from "@/hooks/usePterodactylData";
 
-// Single payment method - ABA PayWay (uses ikhode gateway)
+interface NestEggSelection {
+  nestId: number | null;
+  eggId: number | null;
+}
 
 const Cart = () => {
   const navigate = useNavigate();
@@ -25,8 +29,10 @@ const Cart = () => {
   const { items, removeFromCart, clearCart, getTotal, itemCount } = useCart();
   const { user, loading: authLoading } = useAuth();
   const { generateKHQR, fetchConfig, getWebSocketUrl, config } = useIkhodePayment();
+  const { nests, getEggsForNest, loading: panelLoading } = usePterodactylData();
   
   const [serverNames, setServerNames] = useState<Record<string, string>>({});
+  const [nestEggSelections, setNestEggSelections] = useState<Record<string, NestEggSelection>>({});
   const [processing, setProcessing] = useState(false);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [orderId, setOrderId] = useState<string | null>(null);
@@ -49,12 +55,21 @@ const Cart = () => {
       return;
     }
 
-    // Validate server names
+    // Validate server names and nest/egg selections
     for (const item of items) {
       if (!serverNames[item.id]?.trim()) {
         toast({ 
           title: "Please enter server names", 
           description: `Enter a name for ${item.gameName} - ${item.planName}`,
+          variant: "destructive" 
+        });
+        return;
+      }
+      const selection = nestEggSelections[item.id];
+      if (!selection?.nestId || !selection?.eggId) {
+        toast({ 
+          title: "Please select Nest and Egg", 
+          description: `Select a Nest and Egg for ${item.gameName} - ${item.planName}`,
           variant: "destructive" 
         });
         return;
@@ -75,15 +90,20 @@ const Cart = () => {
           status: "pending",
           billing_cycle: "monthly",
           server_details: {
-            items: items.map(item => ({
-              server_name: serverNames[item.id],
-              game_id: item.gameId,
-              plan_id: item.planId,
-              plan_name: item.planName,
-              ram: item.ram,
-              cpu: item.cpu,
-              storage: item.storage,
-            })),
+            items: items.map(item => {
+              const selection = nestEggSelections[item.id];
+              return {
+                server_name: serverNames[item.id],
+                game_id: item.gameId,
+                plan_id: item.planId,
+                plan_name: item.planName,
+                ram: item.ram,
+                cpu: item.cpu,
+                storage: item.storage,
+                pterodactyl_nest_id: selection?.nestId,
+                pterodactyl_egg_id: selection?.eggId,
+              };
+            }),
           },
         })
         .select()
@@ -252,6 +272,65 @@ const Cart = () => {
                             }
                             className="mt-1"
                           />
+                        </div>
+                        
+                        {/* Nest Selection */}
+                        <div className="mt-4 grid grid-cols-2 gap-3">
+                          <div>
+                            <Label className="text-sm">Nest</Label>
+                            <Select
+                              value={nestEggSelections[item.id]?.nestId?.toString() || ""}
+                              onValueChange={(value) => {
+                                setNestEggSelections({
+                                  ...nestEggSelections,
+                                  [item.id]: { nestId: parseInt(value), eggId: null }
+                                });
+                              }}
+                              disabled={panelLoading}
+                            >
+                              <SelectTrigger className="mt-1">
+                                <SelectValue placeholder={panelLoading ? "Loading..." : "Select Nest"} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {nests.map((nest) => (
+                                  <SelectItem key={nest.id} value={nest.id.toString()}>
+                                    {nest.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          
+                          {/* Egg Selection */}
+                          <div>
+                            <Label className="text-sm">Egg</Label>
+                            <Select
+                              value={nestEggSelections[item.id]?.eggId?.toString() || ""}
+                              onValueChange={(value) => {
+                                setNestEggSelections({
+                                  ...nestEggSelections,
+                                  [item.id]: { 
+                                    ...nestEggSelections[item.id], 
+                                    eggId: parseInt(value) 
+                                  }
+                                });
+                              }}
+                              disabled={!nestEggSelections[item.id]?.nestId || panelLoading}
+                            >
+                              <SelectTrigger className="mt-1">
+                                <SelectValue placeholder="Select Egg" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {nestEggSelections[item.id]?.nestId && 
+                                  getEggsForNest(nestEggSelections[item.id].nestId!).map((egg) => (
+                                    <SelectItem key={egg.id} value={egg.id.toString()}>
+                                      {egg.name}
+                                    </SelectItem>
+                                  ))
+                                }
+                              </SelectContent>
+                            </Select>
+                          </div>
                         </div>
                         <div className="mt-4 flex items-center justify-between">
                           <span className="text-xl font-bold text-primary">

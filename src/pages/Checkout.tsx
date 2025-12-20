@@ -160,19 +160,18 @@ const Checkout = () => {
 
       // Generate QR based on payment method
       if (paymentMethod === "ikhode" && ikhodeAvailable) {
-        // Use Ikhode Payment API
+        // Use Ikhode Payment API (matches PHP extension)
         const result = await generateKHQR(
           plan.price,
-          order.id,
+          invoice.id, // PHP uses invoice ID as transactionId
           user?.email,
-          user?.email?.split("@")[0],
-          invoice.id
+          user?.email?.split("@")[0]
         );
 
         if (result) {
           setQrCode(result.qrCodeData);
-          setTransactionId(result.transactionId);
-          setWsUrl(getWebSocketUrl());
+          setTransactionId(invoice.id);
+          setWsUrl(result.wsUrl || getWebSocketUrl());
           toast({ title: "Order created! Scan QR to pay." });
         } else {
           throw new Error("Failed to generate QR code");
@@ -361,8 +360,7 @@ const Checkout = () => {
                   qrCode={qrCode}
                   amount={plan.price}
                   currency="USD"
-                  orderId={orderId || ""}
-                  transactionId={transactionId}
+                  invoiceId={transactionId}
                   description={`${game?.name || "Game"} Server - ${plan.name}`}
                   onCancel={() => navigate("/products")}
                   wsUrl={wsUrl || undefined}

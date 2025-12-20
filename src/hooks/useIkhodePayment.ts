@@ -10,8 +10,9 @@ interface PaymentConfig {
 
 interface KHQRResult {
   qrCodeData: string;
-  transactionId: string;
+  invoiceId: string;
   amount: number;
+  wsUrl: string;
 }
 
 export function useIkhodePayment() {
@@ -34,12 +35,12 @@ export function useIkhodePayment() {
     }
   }, []);
 
+  // Matches PHP extension pay() method signature
   const generateKHQR = useCallback(async (
     amount: number,
-    orderId: string,
-    userEmail?: string,
-    username?: string,
-    invoiceId?: string
+    invoiceId: string,
+    email?: string,
+    username?: string
   ): Promise<KHQRResult | null> => {
     setLoading(true);
     try {
@@ -52,20 +53,20 @@ export function useIkhodePayment() {
       if (!currentConfig?.apiUrl) {
         toast({
           title: "Payment not configured",
-          description: "Please configure the Ikhode Payment API in admin settings",
+          description: "Please configure the KHQR Gateway in admin settings",
           variant: "destructive",
         });
         return null;
       }
 
+      // Call edge function with parameters matching PHP extension
       const { data, error } = await supabase.functions.invoke("ikhode-payment", {
         body: {
           action: "generate-khqr",
           amount,
-          orderId,
-          email: userEmail || "",
+          invoiceId, // PHP uses $invoice->id as transactionId
+          email: email || "",
           username: username || "",
-          invoiceId,
         },
       });
 
@@ -77,8 +78,9 @@ export function useIkhodePayment() {
 
       return {
         qrCodeData: data.qrCodeData,
-        transactionId: data.transactionId,
+        invoiceId: data.invoiceId,
         amount: data.amount,
+        wsUrl: data.wsUrl,
       };
     } catch (error: any) {
       console.error("Error generating KHQR:", error);
@@ -93,13 +95,12 @@ export function useIkhodePayment() {
     }
   }, [config, fetchConfig, toast]);
 
-  const checkPaymentStatus = useCallback(async (orderId: string, transactionId?: string) => {
+  const checkPaymentStatus = useCallback(async (invoiceId: string) => {
     try {
       const { data, error } = await supabase.functions.invoke("ikhode-payment", {
         body: { 
           action: "check-status", 
-          orderId,
-          transactionId,
+          invoiceId,
         },
       });
 
@@ -112,10 +113,7 @@ export function useIkhodePayment() {
   }, []);
 
   const getWebSocketUrl = useCallback(() => {
-    if (config?.wsEnabled && config.wsUrl) {
-      return config.wsUrl;
-    }
-    return null;
+    return config?.wsUrl || null;
   }, [config]);
 
   return {

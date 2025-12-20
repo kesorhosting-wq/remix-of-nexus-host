@@ -14,8 +14,7 @@ interface IkhodePaymentCardProps {
   qrCode: string;
   amount: number;
   currency?: string;
-  orderId: string;
-  transactionId: string;
+  invoiceId: string;
   description?: string;
   onComplete?: () => void;
   onCancel?: () => void;
@@ -27,8 +26,7 @@ const IkhodePaymentCard = ({
   qrCode,
   amount,
   currency = "USD",
-  orderId,
-  transactionId,
+  invoiceId,
   description,
   onComplete,
   onCancel,
@@ -68,14 +66,10 @@ const IkhodePaymentCard = ({
             console.log("[WS] Message received:", data);
 
             // Handle payment_success event from YOUR API
+            // Your API sends: { type: 'payment_success', transactionId, amount, email, username }
             if (data.type === "payment_success") {
-              // Check if it matches our transaction
-              if (data.transactionId === transactionId || 
-                  data.email || // Your API also sends email/username
-                  !data.transactionId) { // Accept if no specific transaction
-                console.log("[WS] Payment success detected!");
-                handlePaymentSuccess();
-              }
+              console.log("[WS] Payment success detected!");
+              handlePaymentSuccess();
             }
           } catch (e) {
             console.error("[WS] Parse error:", e);
@@ -110,7 +104,7 @@ const IkhodePaymentCard = ({
         wsRef.current = null;
       }
     };
-  }, [wsUrl, transactionId, paymentStatus, timeLeft]);
+  }, [wsUrl, paymentStatus, timeLeft]);
 
   // Timer countdown
   useEffect(() => {
@@ -127,57 +121,38 @@ const IkhodePaymentCard = ({
     return () => clearInterval(timer);
   }, []);
 
-  // Fallback polling if no WebSocket
+  // Fallback polling if no WebSocket (every 5 seconds like your API)
   useEffect(() => {
     if (wsConnected || paymentStatus !== "pending") return;
 
     const pollInterval = setInterval(async () => {
       await checkPaymentStatus(true);
-    }, 5000); // Poll every 5 seconds as fallback
+    }, 5000);
 
     return () => clearInterval(pollInterval);
-  }, [wsConnected, paymentStatus, orderId]);
+  }, [wsConnected, paymentStatus, invoiceId]);
 
   const handlePaymentSuccess = async () => {
     setPaymentStatus("paid");
     toast({ title: "Payment received!", description: "Setting up your server..." });
 
     try {
-      // Update order and invoice status (webhook should have done this, but ensure it's done)
-      await supabase.from("orders").update({ status: "paid" }).eq("id", orderId);
-      
-      const { data: invoiceUpdate } = await supabase
+      // The webhook should have already updated everything, but we double-check
+      const { data: invoice } = await supabase
         .from("invoices")
-        .update({ status: "paid", paid_at: new Date().toISOString() })
-        .eq("order_id", orderId)
-        .select()
+        .select("*, orders(*)")
+        .eq("id", invoiceId)
         .single();
 
-      // Send payment confirmation email
-      if (invoiceUpdate) {
-        try {
-          await supabase.functions.invoke("send-email", {
-            body: { action: "payment-confirmation", invoiceId: invoiceUpdate.id }
-          });
-        } catch (emailError) {
-          console.error("Email notification error:", emailError);
-        }
-      }
-
-      // Trigger server provisioning
-      setPaymentStatus("provisioning");
-      
-      const { data: order } = await supabase.from("orders").select("*").eq("id", orderId).single();
-      
-      if (order) {
+      if (invoice?.order_id) {
+        setPaymentStatus("provisioning");
+        
+        // Trigger server provisioning
         const { error: provisionError } = await supabase.functions.invoke("pterodactyl", {
-          body: { action: "create", orderId, serverDetails: order.server_details },
+          body: { action: "create", orderId: invoice.order_id, serverDetails: invoice.orders?.server_details },
         });
 
-        if (provisionError) {
-          console.error("Provisioning error:", provisionError);
-          toast({ title: "Server provisioning started", description: "Your server is being set up." });
-        } else {
+        if (!provisionError) {
           toast({ title: "Server created!", description: "Your server is now active." });
         }
       }
@@ -195,14 +170,14 @@ const IkhodePaymentCard = ({
     if (!silent) setChecking(true);
     
     try {
-      // Check order status directly
-      const { data: order } = await supabase
-        .from("orders")
+      // Check invoice status directly
+      const { data: invoice } = await supabase
+        .from("invoices")
         .select("status")
-        .eq("id", orderId)
+        .eq("id", invoiceId)
         .single();
 
-      if (order?.status === "paid" || order?.status === "provisioning" || order?.status === "active") {
+      if (invoice?.status === "paid") {
         await handlePaymentSuccess();
       } else if (!silent) {
         toast({ 
@@ -218,7 +193,7 @@ const IkhodePaymentCard = ({
     } finally {
       if (!silent) setChecking(false);
     }
-  }, [orderId, toast]);
+  }, [invoiceId, toast]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -270,8 +245,8 @@ const IkhodePaymentCard = ({
                 <Wallet className="w-6 h-6" />
               </div>
               <div>
-                <h2 className="text-xl font-bold">Ikhode KHQR</h2>
-                <p className="text-white/80 text-sm">Bakong Payment</p>
+                <h2 className="text-xl font-bold">KHQR Payment</h2>
+                <p className="text-white/80 text-sm">Bakong Gateway</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -371,16 +346,16 @@ const IkhodePaymentCard = ({
           </div>
         </div>
 
-        {/* Transaction ID */}
+        {/* Invoice ID */}
         <div className="mt-4 flex items-center justify-between p-3 bg-muted rounded-lg">
           <div>
-            <p className="text-xs text-muted-foreground">Transaction ID</p>
-            <p className="font-mono text-sm truncate max-w-[180px]">{transactionId}</p>
+            <p className="text-xs text-muted-foreground">Invoice ID</p>
+            <p className="font-mono text-sm truncate max-w-[180px]">{invoiceId}</p>
           </div>
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => copyToClipboard(transactionId, "Transaction ID")}
+            onClick={() => copyToClipboard(invoiceId, "Invoice ID")}
             className="h-8 w-8"
           >
             {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}

@@ -17,7 +17,7 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Get Ikhode API config from payment_gateways
+    // Get Ikhode API config from payment_gateways (matching PHP extension config names)
     const { data: gateway, error: gatewayError } = await supabase
       .from("payment_gateways")
       .select("config, enabled")
@@ -25,7 +25,7 @@ serve(async (req) => {
       .maybeSingle();
 
     if (gatewayError) {
-      console.error("Error fetching gateway config:", gatewayError);
+      console.error("[Ikhode] Error fetching gateway config:", gatewayError);
       return new Response(
         JSON.stringify({ error: "Failed to fetch payment gateway config" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -46,17 +46,20 @@ serve(async (req) => {
       );
     }
 
+    // Config matches PHP extension: node_api_url, websocket_url, webhook_secret
     const config = gateway.config as { 
-      apiUrl: string; 
-      wsPort?: number;
-      webhookSecret?: string;
+      node_api_url: string; 
+      websocket_url: string;
+      webhook_secret: string;
     };
     
-    const apiUrl = config.apiUrl?.replace(/\/$/, ""); // Remove trailing slash
+    const apiUrl = config.node_api_url?.replace(/\/$/, "");
+    const wsUrl = config.websocket_url;
+    const webhookSecret = config.webhook_secret || "";
 
     if (!apiUrl) {
       return new Response(
-        JSON.stringify({ error: "Ikhode Payment API URL not configured" }),
+        JSON.stringify({ error: "Node.js API URL not configured" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -68,28 +71,29 @@ serve(async (req) => {
 
     switch (action) {
       case "generate-khqr": {
-        const { amount, orderId, email, username, invoiceId } = params;
+        // Matches PHP extension pay() method
+        const { amount, invoiceId, email, username } = params;
 
-        // Build the callback URL for the webhook
-        const callbackUrl = `${supabaseUrl}/functions/v1/ikhode-webhook`;
-        const webhookSecret = config.webhookSecret || Deno.env.get("IKHODE_WEBHOOK_SECRET") || "";
+        // Build callback URL exactly like PHP: url('/extensions/khqr/webhook/' . $invoice->id)
+        // But we use our edge function: /functions/v1/ikhode-webhook/{invoiceId}
+        const callbackUrl = `${supabaseUrl}/functions/v1/ikhode-webhook/${invoiceId}`;
 
-        // Generate a transaction ID matching your API format
-        const transactionId = `TXN-${orderId.slice(0, 8)}-${Date.now()}`;
-
-        console.log(`[Ikhode] Generating KHQR:`);
+        console.log(`[Ikhode] Generating KHQR (matching PHP extension):`);
         console.log(`  - Amount: ${amount}`);
-        console.log(`  - Transaction ID: ${transactionId}`);
+        console.log(`  - Invoice/Transaction ID: ${invoiceId}`);
+        console.log(`  - Email: ${email}`);
+        console.log(`  - Username: ${username}`);
         console.log(`  - Callback URL: ${callbackUrl}`);
         console.log(`  - API Endpoint: ${apiUrl}/generate-khqr`);
 
-        // Call YOUR API endpoint: POST /generate-khqr
+        // Call Node.js API exactly like PHP extension does
+        // PHP: Http::post("{$apiUrl}/generate-khqr", [...])
         const response = await fetch(`${apiUrl}/generate-khqr`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             amount: Number(amount),
-            transactionId,
+            transactionId: invoiceId, // PHP uses $invoice->id as transactionId
             email: email || "",
             username: username || "",
             callbackUrl,
@@ -100,33 +104,36 @@ serve(async (req) => {
         if (!response.ok) {
           const errorText = await response.text();
           console.error(`[Ikhode] API error ${response.status}:`, errorText);
-          throw new Error(`API error: ${response.status} - ${errorText}`);
+          // Match PHP error handling
+          let errorMessage = "Failed to contact payment API. Check Node.js logs.";
+          try {
+            const errorJson = JSON.parse(errorText);
+            errorMessage = errorJson.error || errorMessage;
+          } catch {}
+          return new Response(
+            JSON.stringify({ error: errorMessage }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
         }
 
         const data = await response.json();
-        console.log(`[Ikhode] KHQR generated successfully, has QR data: ${!!data.qrCodeData}`);
+        const qrCodeData = data.qrCodeData;
 
-        // Store the transaction reference in the order
-        const { data: existingOrder } = await supabase
-          .from("orders")
-          .select("server_details")
-          .eq("id", orderId)
-          .single();
+        if (!qrCodeData) {
+          // Match PHP: 'Node.js API did not return a QR Code image data.'
+          return new Response(
+            JSON.stringify({ error: "Node.js API did not return a QR Code image data." }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
 
-        await supabase
-          .from("orders")
-          .update({ 
-            notes: `Transaction: ${transactionId}`,
-            server_details: {
-              ...(existingOrder?.server_details || {}),
-              paymentTransactionId: transactionId,
-            }
-          })
-          .eq("id", orderId);
+        console.log(`[Ikhode] KHQR generated successfully`);
 
+        // Return data for the view (matches PHP returning view with qrCodeData, wsUrl)
         return new Response(JSON.stringify({
-          qrCodeData: data.qrCodeData,
-          transactionId,
+          qrCodeData,
+          wsUrl,
+          invoiceId,
           amount,
         }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -134,39 +141,25 @@ serve(async (req) => {
       }
 
       case "check-status": {
-        const { transactionId, orderId } = params;
+        const { invoiceId } = params;
         
-        // Check payment status in our database
-        const { data: order } = await supabase
-          .from("orders")
-          .select("status, notes")
-          .eq("id", orderId || transactionId)
+        // Check invoice status in our database
+        const { data: invoice } = await supabase
+          .from("invoices")
+          .select("status")
+          .eq("id", invoiceId)
           .maybeSingle();
 
         return new Response(
           JSON.stringify({ 
-            status: order?.status || "pending",
-            transactionId: transactionId || orderId,
+            status: invoice?.status === "paid" ? "paid" : "pending",
+            invoiceId,
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
       case "get-config": {
-        // Build WebSocket URL from API URL (your API uses port 8080)
-        const wsPort = config.wsPort || 8080;
-        let wsUrl = "";
-        
-        if (apiUrl) {
-          try {
-            const url = new URL(apiUrl);
-            const wsProtocol = url.protocol === "https:" ? "wss:" : "ws:";
-            wsUrl = `${wsProtocol}//${url.hostname}:${wsPort}`;
-          } catch (e) {
-            console.error("[Ikhode] Error parsing API URL for WebSocket:", e);
-          }
-        }
-
         console.log(`[Ikhode] Config - API: ${apiUrl}, WS: ${wsUrl}`);
 
         return new Response(

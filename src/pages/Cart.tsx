@@ -10,14 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Trash2, ShoppingCart, ArrowRight, QrCode, Loader2, Wallet, Zap } from "lucide-react";
+import { Trash2, ShoppingCart, ArrowRight, Loader2, Wallet, Zap } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import BakongPaymentCard from "@/components/BakongPaymentCard";
 import IkhodePaymentCard from "@/components/IkhodePaymentCard";
 import { useIkhodePayment } from "@/hooks/useIkhodePayment";
 
-type PaymentMethod = "bakong" | "ikhode";
+// Single payment method - ABA PayWay (uses ikhode gateway)
 
 const Cart = () => {
   const navigate = useNavigate();
@@ -32,7 +31,6 @@ const Cart = () => {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [invoiceId, setInvoiceId] = useState<string | null>(null);
   const [wsUrl, setWsUrl] = useState<string | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("bakong");
   const [ikhodeAvailable, setIkhodeAvailable] = useState(false);
 
   // Check if Ikhode gateway is available
@@ -117,42 +115,20 @@ const Cart = () => {
 
       setInvoiceId(invoice.id);
 
-      if (paymentMethod === "ikhode" && ikhodeAvailable) {
-        // Use KHQR Gateway (Ikhode)
-        const result = await generateKHQR(
-          total,
-          invoice.id,
-          user?.email,
-          user?.email?.split("@")[0]
-        );
+      // Use ABA PayWay (Ikhode gateway)
+      const result = await generateKHQR(
+        total,
+        invoice.id,
+        user?.email,
+        user?.email?.split("@")[0]
+      );
 
-        if (result) {
-          setQrCode(result.qrCodeData);
-          setWsUrl(result.wsUrl || getWebSocketUrl());
-          toast({ title: "Order created! Scan QR to pay." });
-        } else {
-          throw new Error("Failed to generate QR code");
-        }
-      } else {
-        // Use BakongKHQR (default)
-        const { data: qrData, error: qrError } = await supabase.functions.invoke(
-          "bakong-qr",
-          {
-            body: {
-              amount: total,
-              currency: "USD",
-              orderId: order.id,
-              invoiceId: invoice.id,
-              userId: user.id,
-              description: `${items.length} server(s) - ${items.map(i => i.planName).join(", ")}`,
-            },
-          }
-        );
-
-        if (qrError) throw qrError;
-
-        setQrCode(qrData.qrCode);
+      if (result) {
+        setQrCode(result.qrCodeData);
+        setWsUrl(result.wsUrl || getWebSocketUrl());
         toast({ title: "Order created! Scan QR to pay." });
+      } else {
+        throw new Error("Failed to generate QR code");
       }
     } catch (error: any) {
       console.error("Checkout error:", error);
@@ -215,28 +191,16 @@ const Cart = () => {
           </Card>
         ) : qrCode ? (
           <div className="max-w-md mx-auto">
-            {paymentMethod === "ikhode" && invoiceId ? (
-              <IkhodePaymentCard
-                qrCode={qrCode}
-                amount={getTotal()}
-                currency="USD"
-                invoiceId={invoiceId}
-                description={`${items.length} server(s)`}
-                onCancel={handleCancelPayment}
-                onComplete={handlePaymentComplete}
-                wsUrl={wsUrl || undefined}
-              />
-            ) : (
-              <BakongPaymentCard
-                qrCode={qrCode}
-                amount={getTotal()}
-                currency="USD"
-                orderId={orderId || ""}
-                description={`${items.length} server(s)`}
-                onCancel={handleCancelPayment}
-                onComplete={handlePaymentComplete}
-              />
-            )}
+            <IkhodePaymentCard
+              qrCode={qrCode}
+              amount={getTotal()}
+              currency="USD"
+              invoiceId={invoiceId || ""}
+              description={`${items.length} server(s)`}
+              onCancel={handleCancelPayment}
+              onComplete={handlePaymentComplete}
+              wsUrl={wsUrl || undefined}
+            />
           </div>
         ) : (
           <div className="grid lg:grid-cols-3 gap-8">
@@ -324,61 +288,26 @@ const Cart = () => {
                   {/* Payment Method Selection */}
                   <div className="pt-4 space-y-3">
                     <Label className="text-sm font-medium">Payment Method</Label>
-                    <RadioGroup 
-                      value={paymentMethod} 
-                      onValueChange={(v) => setPaymentMethod(v as PaymentMethod)}
-                      className="space-y-2"
-                    >
-                      {/* BakongKHQR Option */}
-                      <Label 
-                        htmlFor="bakong" 
-                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                          paymentMethod === "bakong" 
-                            ? "border-primary bg-primary/5" 
-                            : "border-border hover:border-primary/50"
-                        }`}
-                      >
-                        <RadioGroupItem value="bakong" id="bakong" />
-                        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center">
-                          <QrCode className="w-5 h-5 text-white" />
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-medium text-sm">BakongKHQR</p>
-                          <p className="text-xs text-muted-foreground">Official Bakong QR</p>
-                        </div>
-                      </Label>
-
-                      {/* KHQR Gateway (Ikhode) Option */}
-                      <Label 
-                        htmlFor="ikhode" 
-                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                          !ikhodeAvailable ? "opacity-50 cursor-not-allowed" : ""
-                        } ${
-                          paymentMethod === "ikhode" 
-                            ? "border-primary bg-primary/5" 
-                            : "border-border hover:border-primary/50"
-                        }`}
-                      >
-                        <RadioGroupItem value="ikhode" id="ikhode" disabled={!ikhodeAvailable} />
-                        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
-                          <Wallet className="w-5 h-5 text-white" />
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-medium text-sm flex items-center gap-2">
-                            KHQR Gateway
-                            {ikhodeAvailable && (
-                              <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
-                                <Zap className="w-3 h-3" />
-                                Live
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {ikhodeAvailable ? "Real-time WebSocket updates" : "Not configured"}
-                          </p>
-                        </div>
-                      </Label>
-                    </RadioGroup>
+                    {/* ABA PayWay Payment */}
+                    <div className="flex items-center gap-3 p-3 rounded-lg border border-primary bg-primary/5">
+                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
+                        <Wallet className="w-5 h-5 text-white" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-medium text-sm flex items-center gap-2">
+                          ABA PayWay
+                          {ikhodeAvailable && (
+                            <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+                              <Zap className="w-3 h-3" />
+                              Live
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {ikhodeAvailable ? "Real-time payment updates" : "Not configured"}
+                        </p>
+                      </div>
+                    </div>
                     
                     <Button
                       className="w-full gap-2"

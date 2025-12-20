@@ -7,12 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
-import { Server, CreditCard, QrCode, ArrowLeft, Loader2, Wallet } from "lucide-react";
+import { Server, CreditCard, ArrowLeft, Loader2, Wallet } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import BakongPaymentCard from "@/components/BakongPaymentCard";
 import IkhodePaymentCard from "@/components/IkhodePaymentCard";
 import { useIkhodePayment } from "@/hooks/useIkhodePayment";
 
@@ -158,44 +156,21 @@ const Checkout = () => {
 
       if (invoiceError) throw invoiceError;
 
-      // Generate QR based on payment method
-      if (paymentMethod === "ikhode" && ikhodeAvailable) {
-        // Use Ikhode Payment API (matches PHP extension)
-        const result = await generateKHQR(
-          plan.price,
-          invoice.id, // PHP uses invoice ID as transactionId
-          user?.email,
-          user?.email?.split("@")[0]
-        );
+      // Generate QR using ABA PayWay (Ikhode gateway)
+      const result = await generateKHQR(
+        plan.price,
+        invoice.id,
+        user?.email,
+        user?.email?.split("@")[0]
+      );
 
-        if (result) {
-          setQrCode(result.qrCodeData);
-          setTransactionId(invoice.id);
-          setWsUrl(result.wsUrl || getWebSocketUrl());
-          toast({ title: "Order created! Scan QR to pay." });
-        } else {
-          throw new Error("Failed to generate QR code");
-        }
-      } else {
-        // Fallback to original Bakong edge function
-        const { data: qrData, error: qrError } = await supabase.functions.invoke(
-          "bakong-qr",
-          {
-            body: {
-              amount: plan.price,
-              currency: "USD",
-              orderId: order.id,
-              invoiceId: invoice.id,
-              description: `${game?.name || "Game"} Server - ${plan.name}`,
-            },
-          }
-        );
-
-        if (qrError) throw qrError;
-
-        setQrCode(qrData.qrCode);
-        setPaymentMethod("bakong");
+      if (result) {
+        setQrCode(result.qrCodeData);
+        setTransactionId(invoice.id);
+        setWsUrl(result.wsUrl || getWebSocketUrl());
         toast({ title: "Order created! Scan QR to pay." });
+      } else {
+        throw new Error("Failed to generate QR code");
       }
     } catch (error: any) {
       console.error("Checkout error:", error);
@@ -313,30 +288,13 @@ const Checkout = () => {
 
                   <div className="space-y-3">
                     <Label>Payment Method</Label>
-                    <RadioGroup value={paymentMethod} onValueChange={setPaymentMethod}>
-                      {ikhodeAvailable && (
-                        <div className="flex items-center space-x-3 p-4 border rounded-lg cursor-pointer hover:border-primary transition-colors">
-                          <RadioGroupItem value="ikhode" id="ikhode" />
-                          <Label htmlFor="ikhode" className="flex items-center gap-2 cursor-pointer flex-1">
-                            <Wallet className="w-5 h-5 text-blue-600" />
-                            <div>
-                              <span className="font-medium">Ikhode KHQR</span>
-                              <p className="text-xs text-muted-foreground">Real-time payment updates</p>
-                            </div>
-                          </Label>
-                        </div>
-                      )}
-                      <div className="flex items-center space-x-3 p-4 border rounded-lg cursor-pointer hover:border-primary transition-colors">
-                        <RadioGroupItem value="bakong" id="bakong" />
-                        <Label htmlFor="bakong" className="flex items-center gap-2 cursor-pointer flex-1">
-                          <QrCode className="w-5 h-5 text-[#e31837]" />
-                          <div>
-                            <span className="font-medium">BakongKHQR</span>
-                            <p className="text-xs text-muted-foreground">Standard payment</p>
-                          </div>
-                        </Label>
+                    <div className="flex items-center space-x-3 p-4 border border-primary rounded-lg bg-primary/5">
+                      <Wallet className="w-5 h-5 text-blue-600" />
+                      <div>
+                        <span className="font-medium">ABA PayWay</span>
+                        <p className="text-xs text-muted-foreground">Real-time payment updates</p>
                       </div>
-                    </RadioGroup>
+                    </div>
                   </div>
 
                     <Button
@@ -355,24 +313,15 @@ const Checkout = () => {
                     )}
                   </Button>
                 </>
-              ) : paymentMethod === "ikhode" && transactionId ? (
+              ) : (
                 <IkhodePaymentCard
                   qrCode={qrCode}
                   amount={plan.price}
                   currency="USD"
-                  invoiceId={transactionId}
+                  invoiceId={transactionId || ""}
                   description={`${game?.name || "Game"} Server - ${plan.name}`}
                   onCancel={() => navigate("/products")}
                   wsUrl={wsUrl || undefined}
-                />
-              ) : (
-                <BakongPaymentCard
-                  qrCode={qrCode}
-                  amount={plan.price}
-                  currency="USD"
-                  orderId={orderId || ""}
-                  description={`${game?.name || "Game"} Server - ${plan.name}`}
-                  onCancel={() => navigate("/products")}
                 />
               )}
             </CardContent>

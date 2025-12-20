@@ -13,8 +13,19 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { 
   Shield, Home, LogOut, Package, FileText, MessageSquare, 
   DollarSign, Users, Server, Eye, Send, RefreshCw, Loader2,
-  CheckCircle, XCircle, Clock, AlertCircle, CreditCard
+  CheckCircle, XCircle, Clock, AlertCircle, CreditCard, Trash2
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { format } from "date-fns";
@@ -110,6 +121,8 @@ const AdminDashboard = () => {
   const [sendingReply, setSendingReply] = useState(false);
   const [provisioningOrder, setProvisioningOrder] = useState<string | null>(null);
   const [updatingPayment, setUpdatingPayment] = useState<string | null>(null);
+  const [deletingOrder, setDeletingOrder] = useState<string | null>(null);
+  const [suspendingOrder, setSuspendingOrder] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -199,13 +212,88 @@ const AdminDashboard = () => {
   };
 
   const handleUpdateOrderStatus = async (orderId: string, status: string) => {
+    const order = orders.find(o => o.id === orderId);
+    setSuspendingOrder(orderId);
+    
     try {
+      // If suspending and server exists, suspend in Pterodactyl first
+      if (status === "suspended" && order?.server_id) {
+        try {
+          const { error: suspendError } = await supabase.functions.invoke("pterodactyl", {
+            body: { action: "suspend", serverId: order.server_id }
+          });
+          if (suspendError) {
+            console.error("Failed to suspend in panel:", suspendError);
+            toast({ title: "Warning: Failed to suspend server in panel", variant: "destructive" });
+          }
+        } catch (err) {
+          console.error("Panel suspend error:", err);
+        }
+      }
+      
+      // If unsuspending/activating and server exists, unsuspend in Pterodactyl
+      if (status === "active" && order?.server_id && order.status === "suspended") {
+        try {
+          const { error: unsuspendError } = await supabase.functions.invoke("pterodactyl", {
+            body: { action: "unsuspend", serverId: order.server_id }
+          });
+          if (unsuspendError) {
+            console.error("Failed to unsuspend in panel:", unsuspendError);
+            toast({ title: "Warning: Failed to unsuspend server in panel", variant: "destructive" });
+          }
+        } catch (err) {
+          console.error("Panel unsuspend error:", err);
+        }
+      }
+
       const { error } = await supabase.from("orders").update({ status }).eq("id", orderId);
       if (error) throw error;
       toast({ title: `Order status updated to ${status}` });
       fetchData();
     } catch (error: any) {
       toast({ title: "Failed to update status", variant: "destructive" });
+    } finally {
+      setSuspendingOrder(null);
+    }
+  };
+
+  const handleDeleteOrder = async (order: Order) => {
+    setDeletingOrder(order.id);
+    try {
+      // If server exists, terminate it in Pterodactyl first
+      if (order.server_id) {
+        try {
+          const { error: terminateError } = await supabase.functions.invoke("pterodactyl", {
+            body: { action: "terminate", serverId: order.server_id }
+          });
+          if (terminateError) {
+            console.error("Failed to terminate in panel:", terminateError);
+          }
+        } catch (err) {
+          console.error("Panel terminate error:", err);
+        }
+      }
+
+      // Delete related invoices first
+      const { error: invoiceError } = await supabase
+        .from("invoices")
+        .delete()
+        .eq("order_id", order.id);
+      
+      if (invoiceError) {
+        console.error("Failed to delete invoices:", invoiceError);
+      }
+
+      // Delete the order
+      const { error } = await supabase.from("orders").delete().eq("id", order.id);
+      if (error) throw error;
+      
+      toast({ title: "Service deleted successfully" });
+      fetchData();
+    } catch (error: any) {
+      toast({ title: "Failed to delete service", description: error.message, variant: "destructive" });
+    } finally {
+      setDeletingOrder(null);
     }
   };
 
@@ -512,9 +600,16 @@ const AdminDashboard = () => {
                         <TableCell>{format(new Date(order.created_at), "PP")}</TableCell>
                         <TableCell>
                           <div className="flex gap-2">
-                            <Select onValueChange={(v) => handleUpdateOrderStatus(order.id, v)}>
+                            <Select 
+                              onValueChange={(v) => handleUpdateOrderStatus(order.id, v)}
+                              disabled={suspendingOrder === order.id}
+                            >
                               <SelectTrigger className="w-28 h-8">
-                                <SelectValue placeholder="Status" />
+                                {suspendingOrder === order.id ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <SelectValue placeholder="Status" />
+                                )}
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectItem value="pending">Pending</SelectItem>
@@ -540,6 +635,44 @@ const AdminDashboard = () => {
                                 )}
                               </Button>
                             )}
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  disabled={deletingOrder === order.id}
+                                >
+                                  {deletingOrder === order.id ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="w-4 h-4" />
+                                  )}
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Delete Service</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    Are you sure you want to delete this service? This will:
+                                    <ul className="list-disc list-inside mt-2 space-y-1">
+                                      {order.server_id && <li>Terminate the server in Pterodactyl panel</li>}
+                                      <li>Delete all related invoices</li>
+                                      <li>Permanently remove the order</li>
+                                    </ul>
+                                    <p className="mt-2 font-semibold text-destructive">This action cannot be undone.</p>
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    onClick={() => handleDeleteOrder(order)}
+                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                  >
+                                    Delete Service
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
                           </div>
                         </TableCell>
                       </TableRow>

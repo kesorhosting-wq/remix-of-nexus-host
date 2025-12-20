@@ -53,6 +53,7 @@ interface Invoice {
   paid_at: string | null;
   payment_method: string | null;
   notes: string | null;
+  order_id: string | null;
 }
 
 interface Ticket {

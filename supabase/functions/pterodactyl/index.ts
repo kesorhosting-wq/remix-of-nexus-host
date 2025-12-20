@@ -286,9 +286,18 @@ async function createServer(
     .eq("plan_id", planId)
     .maybeSingle();
 
-  // Get or create Pterodactyl user
+  // Get or create Pterodactyl user - returns password if newly created
   const userEmail = profile?.email || `user-${order.user_id}@gamehost.com`;
   const pterodactylUser = await getOrCreateUser(apiUrl, headers, userEmail);
+  
+  // Track if this is a new user (has password) for showing credentials
+  const isNewPanelUser = !!pterodactylUser.password;
+  const panelCredentials = isNewPanelUser ? {
+    email: userEmail,
+    username: pterodactylUser.username,
+    password: pterodactylUser.password,
+    isNew: true,
+  } : null;
 
   // Use plan config or defaults
   const serverName = firstItem.server_name || firstItem.name || `Server-${orderId.slice(0, 8)}`;
@@ -355,22 +364,31 @@ async function createServer(
   const nextDueDate = new Date();
   nextDueDate.setDate(nextDueDate.getDate() + billingDays);
 
-  // Update order with server ID and next due date
+  // Update order with server ID, credentials (if new user), and next due date
+  const updatedServerDetails: Record<string, any> = {
+    ...serverDetails,
+    pterodactyl_id: serverData.attributes.id,
+    pterodactyl_uuid: serverData.attributes.uuid,
+    pterodactyl_identifier: serverId,
+    ip: allocation.ip,
+    port: allocation.port,
+    billing_days: billingDays,
+    panel_url: apiUrl,
+  };
+  
+  // Store credentials only if this is a new panel user
+  if (panelCredentials) {
+    updatedServerDetails.panel_credentials = panelCredentials;
+    console.log("New panel user created, credentials stored for invoice display");
+  }
+
   await supabase
     .from("orders")
     .update({
       server_id: serverId,
       status: "active",
       next_due_date: nextDueDate.toISOString(),
-      server_details: {
-        ...serverDetails,
-        pterodactyl_id: serverData.attributes.id,
-        pterodactyl_uuid: serverData.attributes.uuid,
-        pterodactyl_identifier: serverId,
-        ip: allocation.ip,
-        port: allocation.port,
-        billing_days: billingDays,
-      },
+      server_details: updatedServerDetails,
     })
     .eq("id", orderId);
 
@@ -400,12 +418,16 @@ async function getOrCreateUser(apiUrl: string, headers: Record<string, string>, 
     const searchData = await searchResponse.json();
     if (searchData.data && searchData.data.length > 0) {
       console.log("Found existing Pterodactyl user:", searchData.data[0].attributes.id);
-      return { id: searchData.data[0].attributes.id };
+      return { 
+        id: searchData.data[0].attributes.id,
+        username: searchData.data[0].attributes.username,
+        isExisting: true,
+      };
     }
   }
 
   // Create new user
-  const username = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").substring(0, 20);
+  const username = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").substring(0, 20) + Math.floor(Math.random() * 100);
   const password = generatePassword();
 
   const createResponse = await fetch(`${apiUrl}/api/application/users`, {
@@ -427,9 +449,9 @@ async function getOrCreateUser(apiUrl: string, headers: Record<string, string>, 
   }
 
   const userData = await createResponse.json();
-  console.log("Created new Pterodactyl user:", userData.attributes.id);
+  console.log("Created new Pterodactyl user:", userData.attributes.id, "username:", username);
 
-  return { id: userData.attributes.id, password };
+  return { id: userData.attributes.id, username, password, isExisting: false };
 }
 
 async function findAvailableAllocation(apiUrl: string, headers: Record<string, string>, nodeId?: number) {

@@ -14,10 +14,16 @@ import {
   Calendar,
   Hash,
   X,
-  Printer
+  Printer,
+  Server,
+  Key,
+  User,
+  Copy,
+  ExternalLink
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBranding } from '@/hooks/useBranding';
+import { useToast } from '@/hooks/use-toast';
 
 interface InvoiceItem {
   id: string;
@@ -25,6 +31,20 @@ interface InvoiceItem {
   quantity: number;
   unit_price: number;
   total: number;
+}
+
+interface PanelCredentials {
+  email: string;
+  username: string;
+  password: string;
+  isNew: boolean;
+}
+
+interface ServerDetails {
+  panel_credentials?: PanelCredentials;
+  panel_url?: string;
+  ip?: string;
+  port?: number;
 }
 
 interface Invoice {
@@ -40,6 +60,7 @@ interface Invoice {
   paid_at: string | null;
   payment_method: string | null;
   notes: string | null;
+  order_id: string | null;
 }
 
 interface ModernInvoiceProps {
@@ -50,12 +71,18 @@ interface ModernInvoiceProps {
 
 const ModernInvoice = ({ invoice, onClose, onPay }: ModernInvoiceProps) => {
   const { brand } = useBranding();
+  const { toast } = useToast();
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [serverDetails, setServerDetails] = useState<ServerDetails | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   useEffect(() => {
     fetchItems();
-  }, [invoice.id]);
+    if (invoice.order_id) {
+      fetchOrderDetails();
+    }
+  }, [invoice.id, invoice.order_id]);
 
   const fetchItems = async () => {
     try {
@@ -69,6 +96,34 @@ const ModernInvoice = ({ invoice, onClose, onPay }: ModernInvoiceProps) => {
       console.error('Failed to fetch invoice items:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchOrderDetails = async () => {
+    if (!invoice.order_id) return;
+    try {
+      const { data } = await supabase
+        .from('orders')
+        .select('server_details')
+        .eq('id', invoice.order_id)
+        .single();
+      
+      if (data?.server_details) {
+        setServerDetails(data.server_details as ServerDetails);
+      }
+    } catch (error) {
+      console.error('Failed to fetch order details:', error);
+    }
+  };
+
+  const copyToClipboard = async (text: string, field: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedField(field);
+      toast({ title: 'Copied!', description: `${field} copied to clipboard` });
+      setTimeout(() => setCopiedField(null), 2000);
+    } catch (error) {
+      console.error('Failed to copy:', error);
     }
   };
 
@@ -251,7 +306,7 @@ const ModernInvoice = ({ invoice, onClose, onPay }: ModernInvoiceProps) => {
 
           {/* Paid Confirmation */}
           {invoice.status === 'paid' && invoice.paid_at && (
-            <div className="p-4 rounded-lg bg-green-500/10 border border-green-500/20 flex items-center gap-3">
+            <div className="p-4 rounded-lg bg-green-500/10 border border-green-500/20 flex items-center gap-3 mb-6">
               <CheckCircle2 className="w-6 h-6 text-green-500" />
               <div>
                 <p className="font-semibold text-green-500">Payment Received</p>
@@ -259,6 +314,133 @@ const ModernInvoice = ({ invoice, onClose, onPay }: ModernInvoiceProps) => {
                   Paid on {new Date(invoice.paid_at).toLocaleDateString()} via {invoice.payment_method}
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* Panel Credentials - Show if new user was created */}
+          {invoice.status === 'paid' && serverDetails?.panel_credentials && (
+            <div className="p-6 rounded-lg bg-primary/10 border border-primary/20 mb-6">
+              <div className="flex items-center gap-3 mb-4">
+                <Server className="w-6 h-6 text-primary" />
+                <div>
+                  <p className="font-semibold text-primary">Server Panel Access</p>
+                  <p className="text-sm text-muted-foreground">
+                    Your new panel account has been created. Save these credentials!
+                  </p>
+                </div>
+              </div>
+              
+              <div className="space-y-3 bg-background/50 rounded-lg p-4">
+                {/* Panel URL */}
+                {serverDetails.panel_url && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ExternalLink className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">Panel URL:</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <a 
+                        href={serverDetails.panel_url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-sm font-mono text-primary hover:underline"
+                      >
+                        {serverDetails.panel_url}
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                {/* Username */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <User className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">Username:</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-mono font-semibold">
+                      {serverDetails.panel_credentials.username}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0"
+                      onClick={() => copyToClipboard(serverDetails.panel_credentials!.username, 'Username')}
+                    >
+                      <Copy className={`w-3 h-3 ${copiedField === 'Username' ? 'text-green-500' : ''}`} />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Email */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">Email:</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-mono font-semibold">
+                      {serverDetails.panel_credentials.email}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0"
+                      onClick={() => copyToClipboard(serverDetails.panel_credentials!.email, 'Email')}
+                    >
+                      <Copy className={`w-3 h-3 ${copiedField === 'Email' ? 'text-green-500' : ''}`} />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Password */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Key className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">Password:</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-mono font-semibold bg-yellow-500/20 px-2 py-0.5 rounded">
+                      {serverDetails.panel_credentials.password}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0"
+                      onClick={() => copyToClipboard(serverDetails.panel_credentials!.password, 'Password')}
+                    >
+                      <Copy className={`w-3 h-3 ${copiedField === 'Password' ? 'text-green-500' : ''}`} />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Server Address */}
+                {serverDetails.ip && serverDetails.port && (
+                  <div className="flex items-center justify-between pt-2 border-t">
+                    <div className="flex items-center gap-2">
+                      <Server className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">Server Address:</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-mono font-semibold">
+                        {serverDetails.ip}:{serverDetails.port}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0"
+                        onClick={() => copyToClipboard(`${serverDetails.ip}:${serverDetails.port}`, 'Server Address')}
+                      >
+                        <Copy className={`w-3 h-3 ${copiedField === 'Server Address' ? 'text-green-500' : ''}`} />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs text-muted-foreground mt-3 text-center">
+                ⚠️ Please save these credentials securely. The password will not be shown again.
+              </p>
             </div>
           )}
 

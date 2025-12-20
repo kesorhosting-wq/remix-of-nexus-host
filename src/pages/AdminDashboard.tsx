@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { 
   Shield, Home, LogOut, Package, FileText, MessageSquare, 
   DollarSign, Users, Server, Eye, Send, RefreshCw, Loader2,
-  CheckCircle, XCircle, Clock, AlertCircle
+  CheckCircle, XCircle, Clock, AlertCircle, CreditCard
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -69,6 +69,20 @@ interface TicketReply {
   created_at: string;
 }
 
+interface Payment {
+  id: string;
+  user_id: string;
+  invoice_id: string | null;
+  gateway_id: string | null;
+  amount: number;
+  currency: string;
+  status: string;
+  transaction_id: string | null;
+  created_at: string;
+  user_email?: string;
+  invoice_number?: string;
+}
+
 const statusColors: Record<string, string> = {
   pending: "bg-yellow-500/20 text-yellow-500",
   active: "bg-green-500/20 text-green-500",
@@ -89,11 +103,13 @@ const AdminDashboard = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [replyMessage, setReplyMessage] = useState("");
   const [sendingReply, setSendingReply] = useState(false);
   const [provisioningOrder, setProvisioningOrder] = useState<string | null>(null);
+  const [updatingPayment, setUpdatingPayment] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -113,16 +129,22 @@ const AdminDashboard = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [ordersRes, invoicesRes, ticketsRes, profilesRes] = await Promise.all([
+      const [ordersRes, invoicesRes, ticketsRes, profilesRes, paymentsRes] = await Promise.all([
         supabase.from("orders").select("*").order("created_at", { ascending: false }),
         supabase.from("invoices").select("*").order("created_at", { ascending: false }),
         supabase.from("tickets").select("*, replies:ticket_replies(*)").order("updated_at", { ascending: false }),
         supabase.from("profiles").select("user_id, email"),
+        supabase.from("payments").select("*").order("created_at", { ascending: false }),
       ]);
 
       const profileMap = new Map<string, string>();
       profilesRes.data?.forEach((p: Profile) => {
         if (p.email) profileMap.set(p.user_id, p.email);
+      });
+
+      const invoiceMap = new Map<string, string>();
+      invoicesRes.data?.forEach((i: any) => {
+        invoiceMap.set(i.id, i.invoice_number);
       });
 
       if (ordersRes.data) {
@@ -133,6 +155,13 @@ const AdminDashboard = () => {
       }
       if (ticketsRes.data) {
         setTickets(ticketsRes.data.map((t: any) => ({ ...t, user_email: profileMap.get(t.user_id) || "N/A" })));
+      }
+      if (paymentsRes.data) {
+        setPayments(paymentsRes.data.map((p: any) => ({ 
+          ...p, 
+          user_email: profileMap.get(p.user_id) || "N/A",
+          invoice_number: p.invoice_id ? invoiceMap.get(p.invoice_id) : null
+        })));
       }
     } catch (error) {
       console.error("Error fetching data:", error);
@@ -282,6 +311,29 @@ const AdminDashboard = () => {
     }
   };
 
+  const handleUpdatePaymentStatus = async (paymentId: string, status: string) => {
+    setUpdatingPayment(paymentId);
+    try {
+      const { error } = await supabase.from("payments").update({ status }).eq("id", paymentId);
+      if (error) throw error;
+
+      // If marking as completed, also update associated invoice
+      if (status === "completed") {
+        const payment = payments.find(p => p.id === paymentId);
+        if (payment?.invoice_id) {
+          await handleUpdateInvoiceStatus(payment.invoice_id, "paid");
+        }
+      }
+
+      toast({ title: `Payment marked as ${status}` });
+      fetchData();
+    } catch (error: any) {
+      toast({ title: "Failed to update payment", variant: "destructive" });
+    } finally {
+      setUpdatingPayment(null);
+    }
+  };
+
   if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -301,6 +353,7 @@ const AdminDashboard = () => {
     pendingOrders: orders.filter((o) => o.status === "pending").length,
     totalRevenue: invoices.filter((i) => i.status === "paid").reduce((sum, i) => sum + i.total, 0),
     openTickets: tickets.filter((t) => t.status === "open").length,
+    pendingPayments: payments.filter((p) => p.status === "pending").length,
   };
 
   return (
@@ -332,7 +385,7 @@ const AdminDashboard = () => {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
           <Card>
             <CardContent className="pt-6">
               <div className="flex items-center gap-2">
@@ -380,6 +433,17 @@ const AdminDashboard = () => {
           <Card>
             <CardContent className="pt-6">
               <div className="flex items-center gap-2">
+                <CreditCard className="w-5 h-5 text-orange-500" />
+                <div>
+                  <p className="text-2xl font-bold">{stats.pendingPayments}</p>
+                  <p className="text-xs text-muted-foreground">Pending Payments</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2">
                 <MessageSquare className="w-5 h-5 text-blue-500" />
                 <div>
                   <p className="text-2xl font-bold">{stats.openTickets}</p>
@@ -400,6 +464,10 @@ const AdminDashboard = () => {
             <TabsTrigger value="invoices" className="gap-2">
               <FileText className="w-4 h-4" />
               Invoices ({invoices.length})
+            </TabsTrigger>
+            <TabsTrigger value="payments" className="gap-2">
+              <CreditCard className="w-4 h-4" />
+              Payments ({payments.length})
             </TabsTrigger>
             <TabsTrigger value="tickets" className="gap-2">
               <MessageSquare className="w-4 h-4" />
@@ -524,6 +592,94 @@ const AdminDashboard = () => {
                         </TableCell>
                       </TableRow>
                     ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Payments Tab */}
+          <TabsContent value="payments">
+            <Card>
+              <CardHeader>
+                <div className="flex justify-between items-center">
+                  <CardTitle>All Payments</CardTitle>
+                  <Button variant="outline" size="sm" onClick={fetchData}>
+                    <RefreshCw className="w-4 h-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Transaction ID</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Invoice</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {payments.map((payment) => (
+                      <TableRow key={payment.id}>
+                        <TableCell className="font-mono text-xs">
+                          {payment.transaction_id || payment.id.slice(0, 8)}
+                        </TableCell>
+                        <TableCell>{payment.user_email}</TableCell>
+                        <TableCell className="font-mono">
+                          {payment.invoice_number || "N/A"}
+                        </TableCell>
+                        <TableCell>
+                          {payment.currency} ${payment.amount.toFixed(2)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={statusColors[payment.status] || "bg-gray-500/20 text-gray-500"}>
+                            {payment.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{format(new Date(payment.created_at), "PP p")}</TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Select 
+                              onValueChange={(v) => handleUpdatePaymentStatus(payment.id, v)}
+                              disabled={updatingPayment === payment.id}
+                            >
+                              <SelectTrigger className="w-32 h-8">
+                                <SelectValue placeholder="Update" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="pending">Pending</SelectItem>
+                                <SelectItem value="completed">
+                                  <span className="flex items-center gap-1">
+                                    <CheckCircle className="w-3 h-3 text-green-500" />
+                                    Completed
+                                  </span>
+                                </SelectItem>
+                                <SelectItem value="failed">
+                                  <span className="flex items-center gap-1">
+                                    <XCircle className="w-3 h-3 text-red-500" />
+                                    Failed
+                                  </span>
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {updatingPayment === payment.id && (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {payments.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                          No payments found
+                        </TableCell>
+                      </TableRow>
+                    )}
                   </TableBody>
                 </Table>
               </CardContent>

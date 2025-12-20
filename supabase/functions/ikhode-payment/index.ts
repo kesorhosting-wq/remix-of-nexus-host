@@ -78,9 +78,14 @@ serve(async (req) => {
         // But we use our edge function: /functions/v1/ikhode-webhook/{invoiceId}
         const callbackUrl = `${supabaseUrl}/functions/v1/ikhode-webhook/${invoiceId}`;
 
+        // KHQR billNumber has max 25 characters - shorten the UUID
+        // Format: INV-{first8chars}-{timestamp_last6}
+        const shortTransactionId = `INV-${invoiceId.slice(0, 8)}-${Date.now().toString().slice(-6)}`;
+
         console.log(`[Ikhode] Generating KHQR (matching PHP extension):`);
         console.log(`  - Amount: ${amount}`);
-        console.log(`  - Invoice/Transaction ID: ${invoiceId}`);
+        console.log(`  - Invoice ID: ${invoiceId}`);
+        console.log(`  - Short Transaction ID: ${shortTransactionId}`);
         console.log(`  - Email: ${email}`);
         console.log(`  - Username: ${username}`);
         console.log(`  - Callback URL: ${callbackUrl}`);
@@ -93,7 +98,7 @@ serve(async (req) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             amount: Number(amount),
-            transactionId: invoiceId, // PHP uses $invoice->id as transactionId
+            transactionId: shortTransactionId, // Shortened to fit KHQR billNumber limit (25 chars)
             email: email || "",
             username: username || "",
             callbackUrl,

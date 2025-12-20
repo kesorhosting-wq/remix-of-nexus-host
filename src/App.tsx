@@ -23,6 +23,7 @@ import CreateTicket from "./pages/CreateTicket";
 import Products from "./pages/Products";
 import Checkout from "./pages/Checkout";
 import Cart from "./pages/Cart";
+import PaymentHistory from "./pages/PaymentHistory";
 import DynamicHead from "./components/DynamicHead";
 import { LanguageProvider } from "./contexts/LanguageContext";
 import { CartProvider } from "./contexts/CartContext";
@@ -50,6 +51,7 @@ const App = () => (
                 <Route path="/admin/dashboard" element={<AdminDashboard />} />
                 <Route path="/auth" element={<ClientAuth />} />
                 <Route path="/client" element={<ClientArea />} />
+                <Route path="/client/payments" element={<PaymentHistory />} />
                 <Route path="/tickets/new" element={<CreateTicket />} />
                 <Route path="/about" element={<About />} />
                 <Route path="/blog" element={<Blog />} />

@@ -20,3 +20,6 @@ verify_jwt = false
 
 [functions.ikhode-payment]
 verify_jwt = false
+
+[functions.ikhode-webhook]
+verify_jwt = false

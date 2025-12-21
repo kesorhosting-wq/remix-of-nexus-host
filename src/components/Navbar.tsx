@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Menu, X, Zap, User, ShoppingCart } from "lucide-react";
 import { useGameStore } from "@/store/gameStore";
@@ -16,6 +16,8 @@ const Navbar = () => {
   const { brand } = useGameStore();
   const { t } = useLanguage();
   const { itemCount } = useCart();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -37,13 +39,29 @@ const Navbar = () => {
     { name: t('nav.locations'), href: "#locations" },
   ];
 
+  const handleAnchorClick = (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    e.preventDefault();
+    const sectionId = href.replace('#', '');
+    
+    if (location.pathname !== '/') {
+      // Navigate to home page with the hash
+      navigate('/' + href);
+    } else {
+      // Already on home page, just scroll
+      const element = document.getElementById(sectionId);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+  };
+
   return (
     <nav className="fixed top-6 left-0 right-0 z-40">
       <div className="container mx-auto px-4">
         <div className="glass rounded-2xl">
           <div className="flex items-center justify-between h-16 px-6">
             {/* Logo */}
-            <a href="/" className="flex items-center gap-3 group">
+            <Link to="/" className="flex items-center gap-3 group">
               <img 
                 src={brand.logoUrl || kesorLogo} 
                 alt={brand.name || "Kesor Hosting"} 
@@ -52,7 +70,7 @@ const Navbar = () => {
               <span className="font-display text-xl font-bold text-gradient">
                 {brand.name || "Kesor Hosting"}
               </span>
-            </a>
+            </Link>
 
             {/* Desktop Navigation */}
             <div className="hidden md:flex items-center gap-8">
@@ -70,6 +88,7 @@ const Navbar = () => {
                   <a
                     key={link.name}
                     href={link.href}
+                    onClick={(e) => handleAnchorClick(e, link.href)}
                     className="font-medium text-muted-foreground hover:text-primary transition-colors duration-300 relative group"
                   >
                     {link.name}
@@ -133,14 +152,28 @@ const Navbar = () => {
             <div className="md:hidden py-4 px-6 border-t border-border animate-fade-up">
               <div className="flex flex-col gap-4">
                 {navLinks.map((link) => (
-                  <a
-                    key={link.name}
-                    href={link.href}
-                    className="font-medium text-muted-foreground hover:text-primary transition-colors py-2"
-                    onClick={() => setIsOpen(false)}
-                  >
-                    {link.name}
-                  </a>
+                  link.isRoute ? (
+                    <Link
+                      key={link.name}
+                      to={link.href}
+                      className="font-medium text-muted-foreground hover:text-primary transition-colors py-2"
+                      onClick={() => setIsOpen(false)}
+                    >
+                      {link.name}
+                    </Link>
+                  ) : (
+                    <a
+                      key={link.name}
+                      href={link.href}
+                      className="font-medium text-muted-foreground hover:text-primary transition-colors py-2"
+                      onClick={(e) => {
+                        handleAnchorClick(e, link.href);
+                        setIsOpen(false);
+                      }}
+                    >
+                      {link.name}
+                    </a>
+                  )
                 ))}
                 <div className="pt-4">
                   <a href={brand.ctaLink}>

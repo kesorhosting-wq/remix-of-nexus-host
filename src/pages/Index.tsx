@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import Navbar from "@/components/Navbar";
 import HeroSection from "@/components/HeroSection";
 import GamesSection from "@/components/GamesSection";
@@ -15,6 +17,21 @@ const Index = () => {
   // Load data from database
   const { loading: dataLoading } = useDataSync();
   const { loading: brandLoading } = useBranding();
+  const location = useLocation();
+
+  // Handle hash navigation when landing on the page
+  useEffect(() => {
+    if (location.hash && !dataLoading && !brandLoading) {
+      const sectionId = location.hash.replace('#', '');
+      // Small delay to ensure DOM is ready
+      setTimeout(() => {
+        const element = document.getElementById(sectionId);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, 100);
+    }
+  }, [location.hash, dataLoading, brandLoading]);
 
   if (dataLoading || brandLoading) {
     return (

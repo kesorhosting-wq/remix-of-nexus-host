@@ -21,6 +21,7 @@ import BakongConfig from "@/components/admin/BakongConfig";
 import IkhodePaymentConfig from "@/components/admin/IkhodePaymentConfig";
 import RenewalReminders from "@/components/admin/RenewalReminders";
 import SMTPConfig from "@/components/admin/SMTPConfig";
+import LoadingScreen from "@/components/LoadingScreen";
 
 const Admin = () => {
   const { toast } = useToast();
@@ -63,14 +64,7 @@ const Admin = () => {
   }, [user, loading, isAdmin, navigate, toast]);
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4" />
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   if (!user || !isAdmin) {

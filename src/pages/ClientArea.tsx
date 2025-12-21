@@ -27,6 +27,7 @@ import Footer from '@/components/Footer';
 import { useToast } from '@/hooks/use-toast';
 import ServerControlPanel from '@/components/client/ServerControlPanel';
 import ModernInvoice from '@/components/client/ModernInvoice';
+import LoadingScreen from '@/components/LoadingScreen';
 
 interface Order {
   id: string;
@@ -166,11 +167,7 @@ const ClientArea = () => {
   };
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   const activeServices = orders.filter(o => o.status === 'active').length;

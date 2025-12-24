@@ -134,6 +134,39 @@ export type Database = {
         }
         Relationships: []
       }
+      email_logs: {
+        Row: {
+          action: string
+          created_at: string
+          error_message: string | null
+          id: string
+          metadata: Json | null
+          recipient: string
+          status: string
+          subject: string | null
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          metadata?: Json | null
+          recipient: string
+          status?: string
+          subject?: string | null
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          metadata?: Json | null
+          recipient?: string
+          status?: string
+          subject?: string | null
+        }
+        Relationships: []
+      }
       game_plans: {
         Row: {
           billing_days: number | null

@@ -266,12 +266,37 @@ async function createServer(
     throw new Error("Order not found");
   }
 
-  // Get user profile for email
+  // Get user email - try profile first, then auth.users as backup
+  let userEmail = null;
+  
   const { data: profile } = await supabase
     .from("profiles")
     .select("email")
     .eq("user_id", order.user_id)
     .single();
+  
+  if (profile?.email) {
+    userEmail = profile.email;
+  } else {
+    // Fallback: get email directly from auth.users using service role
+    const { data: authUser } = await supabase.auth.admin.getUserById(order.user_id);
+    if (authUser?.user?.email) {
+      userEmail = authUser.user.email;
+      console.log("Got email from auth.users:", userEmail);
+      
+      // Also update the profile with the correct email
+      await supabase
+        .from("profiles")
+        .update({ email: authUser.user.email })
+        .eq("user_id", order.user_id);
+    }
+  }
+  
+  if (!userEmail) {
+    throw new Error("User email not found. Cannot create Pterodactyl account without valid email.");
+  }
+  
+  console.log("Creating Pterodactyl user with email:", userEmail);
 
   // Handle cart format: server_details may have items array
   const orderDetails = order.server_details || serverDetails || {};
@@ -287,7 +312,6 @@ async function createServer(
     .maybeSingle();
 
   // Get or create Pterodactyl user - returns password if newly created
-  const userEmail = profile?.email || `user-${order.user_id}@gamehost.com`;
   const pterodactylUser = await getOrCreateUser(apiUrl, headers, userEmail);
   
   // Track if this is a new user (has password) for showing credentials

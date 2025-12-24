@@ -31,9 +31,25 @@ async function getSMTPSettings(supabase: any) {
 async function sendEmail(settings: any, to: string, subject: string, html: string) {
   console.log(`Sending email to: ${to}`);
   console.log(`Subject: ${subject}`);
-  console.log(`From: ${settings.from_name} <${settings.from_email}>`);
   
   const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+  
+  // Use Resend's default domain for testing, or a verified custom domain if configured
+  // Check if from_email uses a common public domain that won't be verified in Resend
+  const publicDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com'];
+  const emailDomain = settings.from_email.split('@')[1]?.toLowerCase();
+  const isPublicDomain = publicDomains.includes(emailDomain);
+  
+  // Use Resend's default onboarding domain for public email domains
+  // Otherwise use the configured from_email (assuming it's a verified domain)
+  const fromEmail = isPublicDomain 
+    ? `${settings.from_name} <onboarding@resend.dev>` 
+    : `${settings.from_name} <${settings.from_email}>`;
+  
+  console.log(`From: ${fromEmail}`);
+  if (isPublicDomain) {
+    console.log(`Note: Using Resend default sender (${settings.from_email} is a public domain). Add your domain at https://resend.com/domains for custom sender.`);
+  }
   
   if (RESEND_API_KEY) {
     const response = await fetch("https://api.resend.com/emails", {
@@ -43,10 +59,11 @@ async function sendEmail(settings: any, to: string, subject: string, html: strin
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: `${settings.from_name} <${settings.from_email}>`,
+        from: fromEmail,
         to: [to],
         subject: subject,
         html: html,
+        reply_to: settings.from_email, // Set reply-to as the original email
       }),
     });
     

@@ -195,12 +195,12 @@ const CreateTicket = () => {
               {orders.length > 0 && (
                 <div className="space-y-2">
                   <Label htmlFor="service">Related Service (Optional)</Label>
-                  <Select value={orderId || ''} onValueChange={(v) => setOrderId(v || null)}>
+                  <Select value={orderId || 'none'} onValueChange={(v) => setOrderId(v === 'none' ? null : v)}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select a service..." />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">None</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
                       {orders.map(order => (
                         <SelectItem key={order.id} value={order.id}>
                           {order.products?.name || 'Service'} - ${order.price}/{order.billing_cycle}

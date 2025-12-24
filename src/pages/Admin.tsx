@@ -182,6 +182,10 @@ const Admin = () => {
           </div>
           <div className="flex items-center gap-2 sm:gap-4 flex-wrap justify-end">
             <span className="text-sm text-muted-foreground hidden sm:inline">{user.email}</span>
+            <Button variant="default" onClick={() => navigate("/admin/dashboard")} className="gap-2">
+              <Server className="w-4 h-4" />
+              <span className="hidden sm:inline">Dashboard</span>
+            </Button>
             <Button variant="outline" onClick={() => navigate("/")} className="gap-2">
               <Home className="w-4 h-4" />
               <span className="hidden sm:inline">Home</span>

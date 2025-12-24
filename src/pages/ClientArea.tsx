@@ -20,7 +20,11 @@ import {
   CreditCard,
   Zap,
   Eye,
-  Settings
+  Settings,
+  Key,
+  Copy,
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
@@ -80,6 +84,9 @@ const ClientArea = () => {
   const [panelUrl, setPanelUrl] = useState<string | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [showCredentials, setShowCredentials] = useState<string | null>(null);
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [newCredentials, setNewCredentials] = useState<{ email: string; username: string; password: string } | null>(null);
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
@@ -138,6 +145,45 @@ const ClientArea = () => {
     await supabase.auth.signOut();
     toast({ title: 'Logged out successfully' });
     navigate('/');
+  };
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast({ title: `${label} copied to clipboard` });
+  };
+
+  const handleResetPassword = async () => {
+    if (!user?.email) {
+      toast({ title: 'Email not found', variant: 'destructive' });
+      return;
+    }
+
+    setResettingPassword(true);
+    setNewCredentials(null);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('pterodactyl', {
+        body: { action: 'reset-password', email: user.email },
+      });
+
+      if (error) throw error;
+
+      if (data.success && data.credentials) {
+        setNewCredentials(data.credentials);
+        toast({ title: 'Password reset successful!' });
+      } else {
+        throw new Error(data.error || 'Failed to reset password');
+      }
+    } catch (error: any) {
+      console.error('Password reset error:', error);
+      toast({ 
+        title: 'Password reset failed', 
+        description: error.message,
+        variant: 'destructive' 
+      });
+    } finally {
+      setResettingPassword(false);
+    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -357,59 +403,130 @@ const ClientArea = () => {
               <div className="grid gap-4">
                 {orders.map(order => (
                   <Card key={order.id} className="hover:shadow-lg transition-shadow">
-                    <CardContent className="flex flex-col md:flex-row items-start md:items-center justify-between p-6 gap-4">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
-                          <Zap className="w-6 h-6 text-primary" />
-                        </div>
-                        <div>
-                          <h3 className="font-semibold text-lg">
-                            {order.server_details?.plan_name || order.products?.name || 'Service'}
-                          </h3>
-                          <p className="text-sm text-muted-foreground">
-                            ${order.price}/{order.billing_cycle} • Due: {order.next_due_date ? new Date(order.next_due_date).toLocaleDateString() : 'N/A'}
-                          </p>
-                          {order.server_details?.ip && order.server_details?.port && (
-                            <p className="text-xs text-muted-foreground font-mono mt-1">
-                              {order.server_details.ip}:{order.server_details.port}
+                    <CardContent className="p-6 space-y-4">
+                      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
+                            <Zap className="w-6 h-6 text-primary" />
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-lg">
+                              {order.server_details?.plan_name || order.products?.name || 'Service'}
+                            </h3>
+                            <p className="text-sm text-muted-foreground">
+                              ${order.price}/{order.billing_cycle} • Due: {order.next_due_date ? new Date(order.next_due_date).toLocaleDateString() : 'N/A'}
                             </p>
+                            {order.server_details?.ip && order.server_details?.port && (
+                              <p className="text-xs text-muted-foreground font-mono mt-1">
+                                {order.server_details.ip}:{order.server_details.port}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {getStatusBadge(order.status)}
+                          {order.server_id && order.status === 'active' ? (
+                            <>
+                              <Button 
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => setSelectedOrder(order)}
+                              >
+                                <Settings className="w-4 h-4 mr-2" />
+                                Control Panel
+                              </Button>
+                              {panelUrl && (
+                                <Button 
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => window.open(panelUrl, '_blank')}
+                                >
+                                  <Server className="w-4 h-4 mr-2" />
+                                  Go to Panel
+                                </Button>
+                              )}
+                              {order.server_details?.panel_credentials && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setShowCredentials(showCredentials === order.id ? null : order.id)}
+                                >
+                                  <Key className="w-4 h-4 mr-2" />
+                                  {showCredentials === order.id ? 'Hide' : 'Show'} Credentials
+                                </Button>
+                              )}
+                            </>
+                          ) : order.status === 'provisioning' ? (
+                            <Button variant="outline" size="sm" disabled>
+                              <Clock className="w-4 h-4 mr-2 animate-spin" />
+                              Setting up...
+                            </Button>
+                          ) : (
+                            <Button variant="outline" size="sm">
+                              {t('billing.manageService')}
+                            </Button>
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {getStatusBadge(order.status)}
-                        {order.server_id && order.status === 'active' ? (
-                          <>
-                            <Button 
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => setSelectedOrder(order)}
-                            >
-                              <Settings className="w-4 h-4 mr-2" />
-                              Control Panel
-                            </Button>
-                            {panelUrl && (
-                              <Button 
-                                size="sm"
-                                variant="outline"
-                                onClick={() => window.open(panelUrl, '_blank')}
-                              >
-                                <Server className="w-4 h-4 mr-2" />
-                                Go to Panel
-                              </Button>
+                      
+                      {/* Panel Credentials Display */}
+                      {showCredentials === order.id && order.server_details?.panel_credentials && (
+                        <div className="mt-4 p-4 bg-muted rounded-lg border">
+                          <h4 className="font-semibold text-sm mb-3 flex items-center gap-2">
+                            <Key className="w-4 h-4 text-primary" />
+                            Panel Login Credentials
+                          </h4>
+                          <div className="grid gap-3 text-sm">
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Email:</span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono">{order.server_details.panel_credentials.email}</span>
+                                <Button 
+                                  size="sm" 
+                                  variant="ghost" 
+                                  className="h-6 w-6 p-0"
+                                  onClick={() => copyToClipboard(order.server_details.panel_credentials.email, 'Email')}
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </Button>
+                              </div>
+                            </div>
+                            {order.server_details.panel_credentials.username && (
+                              <div className="flex justify-between items-center">
+                                <span className="text-muted-foreground">Username:</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono">{order.server_details.panel_credentials.username}</span>
+                                  <Button 
+                                    size="sm" 
+                                    variant="ghost" 
+                                    className="h-6 w-6 p-0"
+                                    onClick={() => copyToClipboard(order.server_details.panel_credentials.username, 'Username')}
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              </div>
                             )}
-                          </>
-                        ) : order.status === 'provisioning' ? (
-                          <Button variant="outline" size="sm" disabled>
-                            <Clock className="w-4 h-4 mr-2 animate-spin" />
-                            Setting up...
-                          </Button>
-                        ) : (
-                          <Button variant="outline" size="sm">
-                            {t('billing.manageService')}
-                          </Button>
-                        )}
-                      </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Password:</span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono">{order.server_details.panel_credentials.password}</span>
+                                <Button 
+                                  size="sm" 
+                                  variant="ghost" 
+                                  className="h-6 w-6 p-0"
+                                  onClick={() => copyToClipboard(order.server_details.panel_credentials.password, 'Password')}
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-3">
+                            Use these credentials to log in to the game panel. You can change your password after logging in.
+                          </p>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 ))}
@@ -544,6 +661,118 @@ const ClientArea = () => {
                   <Button variant="outline" className="w-full">
                     Enable Two-Factor Auth
                   </Button>
+                </CardContent>
+              </Card>
+
+              {/* Panel Access Card */}
+              <Card className="md:col-span-2">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Server className="w-5 h-5 text-primary" />
+                    Game Panel Access
+                  </CardTitle>
+                  <CardDescription>Manage your game panel credentials</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {panelUrl ? (
+                    <>
+                      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between p-4 bg-muted rounded-lg">
+                        <div>
+                          <p className="font-medium">Panel URL</p>
+                          <p className="text-sm text-muted-foreground font-mono">{panelUrl}</p>
+                        </div>
+                        <Button variant="outline" onClick={() => window.open(panelUrl, '_blank')}>
+                          <Server className="w-4 h-4 mr-2" />
+                          Open Panel
+                        </Button>
+                      </div>
+                      
+                      <div className="border-t pt-4">
+                        <h4 className="font-medium mb-2">Forgot your panel password?</h4>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Reset your game panel password. A new password will be generated and displayed here.
+                        </p>
+                        
+                        {newCredentials ? (
+                          <div className="p-4 bg-primary/10 rounded-lg border border-primary/20 space-y-3">
+                            <h5 className="font-semibold text-primary flex items-center gap-2">
+                              <CheckCircle2 className="w-4 h-4" />
+                              New Credentials Generated
+                            </h5>
+                            <div className="grid gap-2 text-sm">
+                              <div className="flex justify-between items-center">
+                                <span className="text-muted-foreground">Email:</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono">{newCredentials.email}</span>
+                                  <Button 
+                                    size="sm" 
+                                    variant="ghost" 
+                                    className="h-6 w-6 p-0"
+                                    onClick={() => copyToClipboard(newCredentials.email, 'Email')}
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-muted-foreground">Username:</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono">{newCredentials.username}</span>
+                                  <Button 
+                                    size="sm" 
+                                    variant="ghost" 
+                                    className="h-6 w-6 p-0"
+                                    onClick={() => copyToClipboard(newCredentials.username, 'Username')}
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-muted-foreground">New Password:</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono">{newCredentials.password}</span>
+                                  <Button 
+                                    size="sm" 
+                                    variant="ghost" 
+                                    className="h-6 w-6 p-0"
+                                    onClick={() => copyToClipboard(newCredentials.password, 'Password')}
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-2">
+                              Save these credentials securely. You can change your password after logging in to the panel.
+                            </p>
+                          </div>
+                        ) : (
+                          <Button 
+                            variant="outline" 
+                            onClick={handleResetPassword}
+                            disabled={resettingPassword}
+                          >
+                            {resettingPassword ? (
+                              <>
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                Resetting...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw className="w-4 h-4 mr-2" />
+                                Reset Panel Password
+                              </>
+                            )}
+                          </Button>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-muted-foreground">
+                      No active game servers. Order a server to get panel access.
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             </div>

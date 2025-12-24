@@ -147,6 +147,14 @@ serve(async (req) => {
         });
       }
 
+      case "reset-password": {
+        const { email } = body;
+        const result = await resetUserPassword(config.apiUrl, apiHeaders, email, supabase);
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }
@@ -734,4 +742,58 @@ function generatePassword(): string {
     password += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return password;
+}
+
+async function resetUserPassword(apiUrl: string, headers: Record<string, string>, email: string, supabase: any) {
+  console.log("Resetting password for user:", email);
+  
+  // Find user by email
+  const searchResponse = await fetch(
+    `${apiUrl}/api/application/users?filter[email]=${encodeURIComponent(email)}`,
+    { headers }
+  );
+
+  if (!searchResponse.ok) {
+    throw new Error("Failed to search for user");
+  }
+
+  const searchData = await searchResponse.json();
+  if (!searchData.data || searchData.data.length === 0) {
+    throw new Error("No Pterodactyl account found for this email. Please contact support.");
+  }
+
+  const userId = searchData.data[0].attributes.id;
+  const username = searchData.data[0].attributes.username;
+  const newPassword = generatePassword();
+
+  // Update user password
+  const updateResponse = await fetch(`${apiUrl}/api/application/users/${userId}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({
+      email: email,
+      username: username,
+      first_name: searchData.data[0].attributes.first_name,
+      last_name: searchData.data[0].attributes.last_name,
+      password: newPassword,
+    }),
+  });
+
+  if (!updateResponse.ok) {
+    const errorText = await updateResponse.text();
+    console.error("Failed to reset password:", errorText);
+    throw new Error("Failed to reset password. Please try again or contact support.");
+  }
+
+  console.log("Password reset successful for user:", userId);
+
+  return {
+    success: true,
+    message: "Password reset successful",
+    credentials: {
+      email: email,
+      username: username,
+      password: newPassword,
+    },
+  };
 }

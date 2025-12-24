@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Server, CreditCard, ArrowLeft, Loader2, Wallet } from "lucide-react";
+import { Server, CreditCard, ArrowLeft, Loader2, Wallet, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import IkhodePaymentCard from "@/components/IkhodePaymentCard";
@@ -50,6 +50,8 @@ const Checkout = () => {
   const [transactionId, setTransactionId] = useState<string | null>(null);
   const [wsUrl, setWsUrl] = useState<string | null>(null);
   const [ikhodeAvailable, setIkhodeAvailable] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [checkingEmail, setCheckingEmail] = useState(true);
   
   const { generateKHQR, fetchConfig, getWebSocketUrl, loading: ikhodeLoading } = useIkhodePayment();
 
@@ -60,7 +62,48 @@ const Checkout = () => {
     }
     if (planId) fetchPlanData();
     checkIkhodeAvailability();
+    if (user) verifyUserEmail();
   }, [planId, user, authLoading]);
+
+  const verifyUserEmail = async () => {
+    setCheckingEmail(true);
+    try {
+      // Check if user has a valid email
+      if (!user?.email) {
+        setEmailVerified(false);
+        toast({
+          title: "Email Required",
+          description: "Please add a valid email to your account before checkout.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Ensure the email is in the profiles table
+      const { data: profile, error } = await supabase
+        .from("profiles")
+        .select("email")
+        .eq("user_id", user.id)
+        .single();
+
+      if (error || !profile?.email) {
+        // Update profile with the user's email from auth
+        await supabase
+          .from("profiles")
+          .upsert({ 
+            user_id: user.id, 
+            email: user.email 
+          }, { onConflict: 'user_id' });
+      }
+
+      setEmailVerified(true);
+    } catch (error) {
+      console.error("Error verifying email:", error);
+      setEmailVerified(false);
+    } finally {
+      setCheckingEmail(false);
+    }
+  };
 
   const checkIkhodeAvailability = async () => {
     const config = await fetchConfig();
@@ -102,6 +145,15 @@ const Checkout = () => {
 
   const handleCheckout = async () => {
     if (!user || !plan) return;
+
+    if (!emailVerified) {
+      toast({ 
+        title: "Email verification required", 
+        description: "Please ensure your account has a valid email before checkout.",
+        variant: "destructive" 
+      });
+      return;
+    }
 
     if (!serverName.trim()) {
       toast({ title: "Please enter a server name", variant: "destructive" });
@@ -185,11 +237,47 @@ const Checkout = () => {
     }
   };
 
-  if (loading || authLoading) {
+  if (loading || authLoading || checkingEmail) {
     return <LoadingScreen />;
   }
 
   if (!plan) return null;
+
+  if (!emailVerified) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <main className="container mx-auto px-4 py-24">
+          <Card className="max-w-md mx-auto">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-destructive">
+                <AlertCircle className="w-5 h-5" />
+                Email Verification Required
+              </CardTitle>
+              <CardDescription>
+                Your account needs a valid email address before you can checkout.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                A valid email is required to create your Pterodactyl panel account and receive important notifications about your server.
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => navigate("/products")}>
+                  <ArrowLeft className="w-4 h-4 mr-2" />
+                  Back to Products
+                </Button>
+                <Button onClick={() => navigate("/client")}>
+                  Go to Account Settings
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">

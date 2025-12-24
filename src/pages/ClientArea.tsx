@@ -392,10 +392,10 @@ const ClientArea = () => {
                               <Button 
                                 size="sm"
                                 variant="outline"
-                                onClick={() => window.open(`${panelUrl}/server/${order.server_id}`, '_blank')}
+                                onClick={() => window.open(panelUrl, '_blank')}
                               >
                                 <Server className="w-4 h-4 mr-2" />
-                                Full Panel
+                                Go to Panel
                               </Button>
                             )}
                           </>

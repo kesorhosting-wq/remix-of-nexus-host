@@ -13,7 +13,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { 
   Shield, Home, LogOut, Package, FileText, MessageSquare, 
   DollarSign, Users, Server, Eye, Send, RefreshCw, Loader2,
-  CheckCircle, XCircle, Clock, AlertCircle, CreditCard, Trash2, Pause, SquareCheck
+  CheckCircle, XCircle, Clock, AlertCircle, CreditCard, Trash2, Pause, SquareCheck,
+  Mail, Play, Calendar, AlertTriangle
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -96,6 +97,17 @@ interface Payment {
   invoice_number?: string;
 }
 
+interface EmailLog {
+  id: string;
+  action: string;
+  recipient: string;
+  subject: string | null;
+  status: string;
+  error_message: string | null;
+  metadata: any;
+  created_at: string;
+}
+
 const statusColors: Record<string, string> = {
   pending: "bg-yellow-500/20 text-yellow-500",
   active: "bg-green-500/20 text-green-500",
@@ -106,6 +118,9 @@ const statusColors: Record<string, string> = {
   open: "bg-blue-500/20 text-blue-500",
   closed: "bg-gray-500/20 text-gray-500",
   answered: "bg-green-500/20 text-green-500",
+  sent: "bg-green-500/20 text-green-500",
+  failed: "bg-red-500/20 text-red-500",
+  simulated: "bg-blue-500/20 text-blue-500",
 };
 
 const AdminDashboard = () => {
@@ -117,6 +132,7 @@ const AdminDashboard = () => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [replyMessage, setReplyMessage] = useState("");
@@ -128,6 +144,8 @@ const AdminDashboard = () => {
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
   const [orderStatusFilter, setOrderStatusFilter] = useState<string>("all");
+  const [runningDailyJob, setRunningDailyJob] = useState(false);
+  const [dailyJobResult, setDailyJobResult] = useState<any>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -147,12 +165,13 @@ const AdminDashboard = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [ordersRes, invoicesRes, ticketsRes, profilesRes, paymentsRes] = await Promise.all([
+      const [ordersRes, invoicesRes, ticketsRes, profilesRes, paymentsRes, emailLogsRes] = await Promise.all([
         supabase.from("orders").select("*").order("created_at", { ascending: false }),
         supabase.from("invoices").select("*").order("created_at", { ascending: false }),
         supabase.from("tickets").select("*, replies:ticket_replies(*)").order("updated_at", { ascending: false }),
         supabase.from("profiles").select("user_id, email"),
         supabase.from("payments").select("*").order("created_at", { ascending: false }),
+        supabase.from("email_logs").select("*").order("created_at", { ascending: false }).limit(100),
       ]);
 
       const profileMap = new Map<string, string>();
@@ -181,10 +200,40 @@ const AdminDashboard = () => {
           invoice_number: p.invoice_id ? invoiceMap.get(p.invoice_id) : null
         })));
       }
+      if (emailLogsRes.data) {
+        setEmailLogs(emailLogsRes.data);
+      }
     } catch (error) {
       console.error("Error fetching data:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRunDailyJob = async () => {
+    setRunningDailyJob(true);
+    setDailyJobResult(null);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke("renewal-reminder", {
+        body: { action: "daily-job" }
+      });
+      
+      if (error) throw error;
+      
+      setDailyJobResult(data);
+      toast({ 
+        title: "Daily job completed successfully!",
+        description: `${data.reminders?.emailsSentCount || 0} reminders sent, ${data.suspensions?.suspendedCount || 0} servers suspended`
+      });
+      
+      // Refresh data to show any changes
+      fetchData();
+    } catch (error: any) {
+      console.error("Daily job error:", error);
+      toast({ title: "Daily job failed", description: error.message, variant: "destructive" });
+    } finally {
+      setRunningDailyJob(false);
     }
   };
 
@@ -688,7 +737,7 @@ const AdminDashboard = () => {
 
         {/* Tabs */}
         <Tabs defaultValue="orders">
-          <TabsList className="mb-6">
+          <TabsList className="mb-6 flex-wrap">
             <TabsTrigger value="orders" className="gap-2">
               <Package className="w-4 h-4" />
               Orders ({orders.length})
@@ -704,6 +753,14 @@ const AdminDashboard = () => {
             <TabsTrigger value="tickets" className="gap-2">
               <MessageSquare className="w-4 h-4" />
               Tickets ({tickets.length})
+            </TabsTrigger>
+            <TabsTrigger value="automation" className="gap-2">
+              <Calendar className="w-4 h-4" />
+              Automation
+            </TabsTrigger>
+            <TabsTrigger value="emails" className="gap-2">
+              <Mail className="w-4 h-4" />
+              Email Logs ({emailLogs.length})
             </TabsTrigger>
           </TabsList>
 
@@ -1164,6 +1221,199 @@ const AdminDashboard = () => {
                         </TableCell>
                       </TableRow>
                     ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Automation Tab */}
+          <TabsContent value="automation">
+            <div className="grid gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Calendar className="w-5 h-5" />
+                    Automated Billing Tasks
+                  </CardTitle>
+                  <CardDescription>
+                    Daily tasks run automatically at 8:00 AM UTC. Use the button below to run them manually.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between p-4 bg-muted/50 rounded-lg">
+                    <div>
+                      <h4 className="font-medium flex items-center gap-2">
+                        <Play className="w-4 h-4 text-green-500" />
+                        Run Daily Job Now
+                      </h4>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Sends payment reminders (7, 3, 1 days before due) and suspends overdue servers
+                      </p>
+                    </div>
+                    <Button 
+                      onClick={handleRunDailyJob} 
+                      disabled={runningDailyJob}
+                      className="min-w-[140px]"
+                    >
+                      {runningDailyJob ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Running...
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-4 h-4 mr-2" />
+                          Run Now
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {dailyJobResult && (
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <Card className="border-green-500/20 bg-green-500/5">
+                        <CardHeader className="pb-2">
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <Mail className="w-4 h-4 text-green-500" />
+                            Payment Reminders
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Invoices checked</span>
+                              <span className="font-medium">{dailyJobResult.reminders?.totalInvoicesChecked || 0}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Emails sent</span>
+                              <span className="font-medium text-green-500">{dailyJobResult.reminders?.emailsSentCount || 0}</span>
+                            </div>
+                            {dailyJobResult.reminders?.breakdown && (
+                              <>
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-muted-foreground">• 7 days notice</span>
+                                  <span>{dailyJobResult.reminders.breakdown.sevenDays}</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-muted-foreground">• 3 days warning</span>
+                                  <span>{dailyJobResult.reminders.breakdown.threeDays}</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-muted-foreground">• 1 day urgent</span>
+                                  <span>{dailyJobResult.reminders.breakdown.oneDay}</span>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <Card className="border-orange-500/20 bg-orange-500/5">
+                        <CardHeader className="pb-2">
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4 text-orange-500" />
+                            Auto-Suspensions
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Overdue orders found</span>
+                              <span className="font-medium">{dailyJobResult.suspensions?.overdueCount || 0}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Servers suspended</span>
+                              <span className="font-medium text-orange-500">{dailyJobResult.suspensions?.suspendedCount || 0}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Suspension emails sent</span>
+                              <span className="font-medium">{dailyJobResult.suspensions?.emailsSentCount || 0}</span>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  )}
+
+                  <div className="border-t pt-4">
+                    <h4 className="font-medium mb-2">Scheduled Tasks</h4>
+                    <div className="bg-muted/30 rounded-lg p-4 space-y-2 text-sm">
+                      <div className="flex items-center gap-3">
+                        <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/20">
+                          Active
+                        </Badge>
+                        <span className="font-mono text-xs text-muted-foreground">0 8 * * *</span>
+                        <span>Daily renewal check & auto-suspend (8:00 AM UTC)</span>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* Email Logs Tab */}
+          <TabsContent value="emails">
+            <Card>
+              <CardHeader>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <CardTitle>Email Logs</CardTitle>
+                    <CardDescription>Track all sent emails and their status</CardDescription>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={fetchData}>
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Refresh
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Time</TableHead>
+                      <TableHead>Action</TableHead>
+                      <TableHead>Recipient</TableHead>
+                      <TableHead>Subject</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {emailLogs.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                          No email logs yet. Emails will appear here once sent.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      emailLogs.map((log) => (
+                        <TableRow key={log.id}>
+                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                            {format(new Date(log.created_at), "MMM d, HH:mm")}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="font-mono text-xs">
+                              {log.action}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">{log.recipient}</TableCell>
+                          <TableCell className="max-w-[200px] truncate text-sm">
+                            {log.subject || "-"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={statusColors[log.status] || "bg-gray-500/20 text-gray-500"}>
+                              {log.status}
+                            </Badge>
+                            {log.error_message && (
+                              <p className="text-xs text-red-500 mt-1 truncate max-w-[150px]" title={log.error_message}>
+                                {log.error_message}
+                              </p>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
                   </TableBody>
                 </Table>
               </CardContent>

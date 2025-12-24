@@ -28,20 +28,25 @@ async function getSMTPSettings(supabase: any) {
   return data;
 }
 
-async function sendEmail(settings: any, to: string, subject: string, html: string) {
+async function sendEmail(
+  settings: any, 
+  to: string, 
+  subject: string, 
+  html: string, 
+  supabase: any,
+  action: string,
+  metadata: any = {}
+) {
   console.log(`Sending email to: ${to}`);
   console.log(`Subject: ${subject}`);
   
   const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
   
   // Use Resend's default domain for testing, or a verified custom domain if configured
-  // Check if from_email uses a common public domain that won't be verified in Resend
   const publicDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com'];
   const emailDomain = settings.from_email.split('@')[1]?.toLowerCase();
   const isPublicDomain = publicDomains.includes(emailDomain);
   
-  // Use Resend's default onboarding domain for public email domains
-  // Otherwise use the configured from_email (assuming it's a verified domain)
   const fromEmail = isPublicDomain 
     ? `${settings.from_name} <onboarding@resend.dev>` 
     : `${settings.from_name} <${settings.from_email}>`;
@@ -51,35 +56,78 @@ async function sendEmail(settings: any, to: string, subject: string, html: strin
     console.log(`Note: Using Resend default sender (${settings.from_email} is a public domain). Add your domain at https://resend.com/domains for custom sender.`);
   }
   
-  if (RESEND_API_KEY) {
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: fromEmail,
-        to: [to],
-        subject: subject,
-        html: html,
-        reply_to: settings.from_email, // Set reply-to as the original email
-      }),
-    });
-    
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to send email: ${error}`);
+  let status = 'sent';
+  let errorMessage = null;
+  
+  try {
+    if (RESEND_API_KEY) {
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: fromEmail,
+          to: [to],
+          subject: subject,
+          html: html,
+          reply_to: settings.from_email,
+        }),
+      });
+      
+      if (!response.ok) {
+        const error = await response.text();
+        status = 'failed';
+        errorMessage = error;
+        throw new Error(`Failed to send email: ${error}`);
+      }
+      
+      const result = await response.json();
+      
+      // Log successful email
+      await logEmail(supabase, action, to, subject, 'sent', null, { ...metadata, resendId: result.id });
+      
+      return result;
     }
     
-    return await response.json();
+    // Fallback: Log the email (useful for development)
+    console.log("Email would be sent (no RESEND_API_KEY configured):");
+    console.log({ to, subject, html: html.substring(0, 200) + "..." });
+    
+    // Log simulated email
+    await logEmail(supabase, action, to, subject, 'simulated', null, metadata);
+    
+    return { success: true, message: "Email logged (configure RESEND_API_KEY for actual sending)" };
+  } catch (error: any) {
+    // Log failed email
+    await logEmail(supabase, action, to, subject, 'failed', error.message, metadata);
+    throw error;
   }
-  
-  // Fallback: Log the email (useful for development)
-  console.log("Email would be sent (no RESEND_API_KEY configured):");
-  console.log({ to, subject, html: html.substring(0, 200) + "..." });
-  
-  return { success: true, message: "Email logged (configure RESEND_API_KEY for actual sending)" };
+}
+
+async function logEmail(
+  supabase: any,
+  action: string,
+  recipient: string,
+  subject: string | null,
+  status: string,
+  errorMessage: string | null,
+  metadata: any = {}
+) {
+  try {
+    await supabase.from('email_logs').insert({
+      action,
+      recipient,
+      subject,
+      status,
+      error_message: errorMessage,
+      metadata,
+    });
+    console.log(`Email logged: ${action} to ${recipient} - ${status}`);
+  } catch (err) {
+    console.error('Failed to log email:', err);
+  }
 }
 
 serve(async (req) => {
@@ -108,7 +156,7 @@ serve(async (req) => {
     switch (action) {
       case "test": {
         const html = generateTestEmail(settings.from_name);
-        await sendEmail(settings, to || settings.from_email, "Test Email", html);
+        await sendEmail(settings, to || settings.from_email, "Test Email", html, supabase, action);
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -123,7 +171,7 @@ serve(async (req) => {
         
         const email = profile?.email || to;
         const html = generateWelcomeEmail(userName || email.split("@")[0], settings.from_name);
-        await sendEmail(settings, email, `Welcome to ${settings.from_name}!`, html);
+        await sendEmail(settings, email, `Welcome to ${settings.from_name}!`, html, supabase, action, { userName });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -132,7 +180,7 @@ serve(async (req) => {
 
       case "password-reset": {
         const html = generatePasswordResetEmail(resetUrl, settings.from_name);
-        await sendEmail(settings, to, "Reset Your Password", html);
+        await sendEmail(settings, to, "Reset Your Password", html, supabase, action);
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -157,7 +205,7 @@ serve(async (req) => {
         if (!profile?.email) throw new Error("User email not found");
         
         const html = generatePaymentConfirmationEmail(invoice, settings.from_name);
-        await sendEmail(settings, profile.email, `Payment Received - Invoice #${invoice.invoice_number}`, html);
+        await sendEmail(settings, profile.email, `Payment Received - Invoice #${invoice.invoice_number}`, html, supabase, action, { invoiceId, invoiceNumber: invoice.invoice_number });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -182,7 +230,7 @@ serve(async (req) => {
         if (!profile?.email) throw new Error("User email not found");
         
         const html = generateServerSetupEmail(order, serverDetails, settings.from_name);
-        await sendEmail(settings, profile.email, "Your Server is Ready!", html);
+        await sendEmail(settings, profile.email, "Your Server is Ready!", html, supabase, action, { orderId });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -207,7 +255,7 @@ serve(async (req) => {
         if (!profile?.email) throw new Error("User email not found");
         
         const html = generateRenewalReminderEmail(order, settings.from_name);
-        await sendEmail(settings, profile.email, "Renewal Reminder - Action Required", html);
+        await sendEmail(settings, profile.email, "Renewal Reminder - Action Required", html, supabase, action, { orderId });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -232,7 +280,7 @@ serve(async (req) => {
         if (!profile?.email) throw new Error("User email not found");
         
         const html = generateServiceSuspendedEmail(order, settings.from_name);
-        await sendEmail(settings, profile.email, "Service Suspended - Action Required", html);
+        await sendEmail(settings, profile.email, "Service Suspended - Action Required", html, supabase, action, { orderId });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -257,7 +305,7 @@ serve(async (req) => {
         if (!profile?.email) throw new Error("User email not found");
         
         const html = generateServiceTerminatedEmail(order, settings.from_name);
-        await sendEmail(settings, profile.email, "Service Terminated", html);
+        await sendEmail(settings, profile.email, "Service Terminated", html, supabase, action, { orderId });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -282,7 +330,7 @@ serve(async (req) => {
         if (!profile?.email) throw new Error("User email not found");
         
         const html = generateServiceReactivatedEmail(order, settings.from_name);
-        await sendEmail(settings, profile.email, "Service Reactivated - Welcome Back!", html);
+        await sendEmail(settings, profile.email, "Service Reactivated - Welcome Back!", html, supabase, action, { orderId });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -296,7 +344,7 @@ serve(async (req) => {
         if (!panelCredentials) throw new Error("Panel credentials not provided");
         
         const html = generatePanelCredentialsEmail(panelCredentials, panelUrl, serverName, settings.from_name);
-        await sendEmail(settings, to, "Your Game Panel Login Credentials", html);
+        await sendEmail(settings, to, "Your Game Panel Login Credentials", html, supabase, action, { serverName });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -310,7 +358,7 @@ serve(async (req) => {
         if (!newPassword) throw new Error("New password not provided");
         
         const html = generatePanelPasswordResetEmail(to, newPassword, panelUrl, settings.from_name);
-        await sendEmail(settings, to, "Your Game Panel Password Has Been Reset", html);
+        await sendEmail(settings, to, "Your Game Panel Password Has Been Reset", html, supabase, action);
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -323,7 +371,7 @@ serve(async (req) => {
         if (!to) throw new Error("Recipient email not provided");
         
         const html = generateServerSuspendedOverdueEmail(serverName, orderId, dueDate, amount, paymentUrl, settings.from_name);
-        await sendEmail(settings, to, "⚠️ Server Suspended - Payment Overdue", html);
+        await sendEmail(settings, to, "⚠️ Server Suspended - Payment Overdue", html, supabase, action, { serverName, orderId, amount });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -341,7 +389,7 @@ serve(async (req) => {
         const subjectPrefix = daysUntilDue <= 1 ? "🚨 URGENT:" : daysUntilDue <= 3 ? "⚠️" : "📋";
         const subject = `${subjectPrefix} Payment Due ${daysUntilDue === 1 ? "Tomorrow" : `in ${daysUntilDue} Days`} - Invoice #${invoiceNumber}`;
         
-        await sendEmail(settings, to, subject, html);
+        await sendEmail(settings, to, subject, html, supabase, action, { invoiceNumber, daysUntilDue, amount });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -175,7 +175,7 @@ async function autoSuspendOverdue(supabase: any) {
   // Get active orders that are past due date
   const { data: overdueOrders, error } = await supabase
     .from("orders")
-    .select("*")
+    .select("*, products(name)")
     .eq("status", "active")
     .lt("next_due_date", now.toISOString());
 
@@ -185,11 +185,10 @@ async function autoSuspendOverdue(supabase: any) {
   }
 
   const suspended: string[] = [];
+  const emailsSent: string[] = [];
 
   for (const order of overdueOrders || []) {
-    if (!order.server_id) continue;
-
-    console.log(`Suspending server ${order.server_id} for order ${order.id}`);
+    console.log(`Processing overdue order ${order.id}`);
 
     // Get Pterodactyl config
     const { data: integration } = await supabase
@@ -199,7 +198,8 @@ async function autoSuspendOverdue(supabase: any) {
       .eq("enabled", true)
       .maybeSingle();
 
-    if (integration) {
+    // Suspend server in Pterodactyl if configured
+    if (integration && order.server_id) {
       try {
         // Get server internal ID
         const serverRes = await fetch(
@@ -228,17 +228,50 @@ async function autoSuspendOverdue(supabase: any) {
             }
           );
 
-          // Update order status
-          await supabase
-            .from("orders")
-            .update({ status: "suspended" })
-            .eq("id", order.id);
-
-          suspended.push(order.id);
           console.log(`Successfully suspended server for order ${order.id}`);
         }
       } catch (e) {
         console.error(`Failed to suspend server for order ${order.id}:`, e);
+      }
+    }
+
+    // Update order status to suspended
+    await supabase
+      .from("orders")
+      .update({ status: "suspended" })
+      .eq("id", order.id);
+
+    suspended.push(order.id);
+
+    // Get user email for notification
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("email")
+      .eq("user_id", order.user_id)
+      .single();
+
+    if (profile?.email) {
+      try {
+        // Send suspension email notification
+        const serverName = order.server_details?.plan_name || order.products?.name || "Game Server";
+        const paymentUrl = `${Deno.env.get("SITE_URL") || "https://your-site.com"}/client`;
+
+        await supabase.functions.invoke("send-email", {
+          body: {
+            action: "server-suspended-overdue",
+            to: profile.email,
+            serverName,
+            orderId: order.id,
+            dueDate: order.next_due_date,
+            amount: order.price || 0,
+            paymentUrl,
+          },
+        });
+
+        emailsSent.push(profile.email);
+        console.log(`Suspension email sent to ${profile.email} for order ${order.id}`);
+      } catch (emailError) {
+        console.error(`Failed to send suspension email for order ${order.id}:`, emailError);
       }
     }
   }
@@ -249,6 +282,8 @@ async function autoSuspendOverdue(supabase: any) {
     overdueCount: overdueOrders?.length || 0,
     suspendedCount: suspended.length,
     suspendedOrders: suspended,
+    emailsSentCount: emailsSent.length,
+    emailsSent,
   };
 }
 

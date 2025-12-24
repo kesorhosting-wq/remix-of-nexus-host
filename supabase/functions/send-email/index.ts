@@ -317,6 +317,19 @@ serve(async (req) => {
         });
       }
 
+      case "server-suspended-overdue": {
+        const { serverName, orderId, dueDate, amount, paymentUrl } = body;
+        
+        if (!to) throw new Error("Recipient email not provided");
+        
+        const html = generateServerSuspendedOverdueEmail(serverName, orderId, dueDate, amount, paymentUrl, settings.from_name);
+        await sendEmail(settings, to, "⚠️ Server Suspended - Payment Overdue", html);
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }
@@ -949,6 +962,96 @@ function generatePanelPasswordResetEmail(
         </div>
         <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
           ${brandName} • Premium Game Hosting
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generateServerSuspendedOverdueEmail(
+  serverName: string,
+  orderId: string,
+  dueDate: string,
+  amount: number,
+  paymentUrl: string,
+  brandName: string
+): string {
+  const formattedDate = new Date(dueDate).toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+  
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 60px; height: 60px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 30px;">⚠️</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px;">Server Suspended</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Payment Overdue</p>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Your game server has been <strong>automatically suspended</strong> due to non-payment. Your server is currently inaccessible.
+          </p>
+          
+          <div style="background: #fef2f2; border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #fecaca;">
+            <h3 style="margin: 0 0 16px 0; color: #dc2626;">🔴 Suspension Details</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 12px 0; color: #991b1b; border-bottom: 1px solid #fecaca;">Server</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #7f1d1d; border-bottom: 1px solid #fecaca;">${serverName || 'Game Server'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: #991b1b; border-bottom: 1px solid #fecaca;">Order ID</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #7f1d1d; font-family: monospace; border-bottom: 1px solid #fecaca;">${orderId.substring(0, 8)}...</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: #991b1b; border-bottom: 1px solid #fecaca;">Original Due Date</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #7f1d1d; border-bottom: 1px solid #fecaca;">${formattedDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: #991b1b;">Amount Due</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 700; color: #dc2626; font-size: 18px;">$${amount.toFixed(2)}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #fcd34d;">
+            <h3 style="margin: 0 0 12px 0; color: #92400e;">🔑 How to Reactivate Your Server</h3>
+            <ol style="margin: 0; padding-left: 20px; color: #78350f; font-size: 14px; line-height: 1.8;">
+              <li>Click the button below to pay your outstanding invoice</li>
+              <li>Your server will be automatically reactivated within minutes</li>
+              <li>All your data and configurations will be preserved</li>
+            </ol>
+          </div>
+          
+          <div style="background: #fef2f2; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #ef4444;">
+            <p style="margin: 0; color: #991b1b; font-size: 14px;">
+              <strong>⚠️ Important:</strong> Continued non-payment may result in permanent service termination and <strong>data loss</strong>. Please act promptly to avoid losing your server data.
+            </p>
+          </div>
+          
+          <a href="${paymentUrl}" style="display: block; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; text-decoration: none; padding: 18px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin-top: 24px; font-size: 16px;">
+            💳 Pay Now & Reactivate Server
+          </a>
+          
+          <p style="text-align: center; color: #6b7280; font-size: 13px; margin-top: 16px;">
+            Having trouble? <a href="${paymentUrl.replace('/client', '/client/tickets')}" style="color: #6366f1;">Contact Support</a>
+          </p>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Automated Billing System
         </p>
       </div>
     </body>

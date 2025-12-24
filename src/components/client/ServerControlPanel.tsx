@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -10,9 +10,9 @@ import {
   Square, 
   RotateCcw, 
   Terminal, 
-  Activity, 
-  HardDrive, 
-  Cpu, 
+  Activity,
+  HardDrive,
+  Cpu,
   MemoryStick,
   ExternalLink,
   RefreshCw,
@@ -20,10 +20,12 @@ import {
   Loader2,
   Globe,
   Copy,
-  CheckCircle2
+  CheckCircle2,
+  Gauge
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import ServerResourceMonitor from './ServerResourceMonitor';
 
 interface Order {
   id: string;
@@ -64,11 +66,16 @@ const ServerControlPanel = ({ order, panelUrl, onClose, onRefresh }: ServerContr
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isLiveMonitoring, setIsLiveMonitoring] = useState(true);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const REFRESH_INTERVAL = 5000; // 5 seconds for real-time feel
 
-  const fetchServerStatus = async () => {
+  const fetchServerStatus = useCallback(async () => {
     if (!order.server_id) return;
     
-    setLoading(true);
+    // Only show loading on initial fetch
+    if (!serverStatus) setLoading(true);
+    
     try {
       const { data, error } = await supabase.functions.invoke('pterodactyl', {
         body: { action: 'status', serverId: order.server_id }
@@ -78,16 +85,34 @@ const ServerControlPanel = ({ order, panelUrl, onClose, onRefresh }: ServerContr
       setServerStatus(data);
     } catch (error: any) {
       console.error('Failed to fetch server status:', error);
+      setIsLiveMonitoring(false);
     } finally {
       setLoading(false);
     }
-  };
+  }, [order.server_id, serverStatus]);
 
+  // Setup real-time polling
   useEffect(() => {
     fetchServerStatus();
-    const interval = setInterval(fetchServerStatus, 10000);
-    return () => clearInterval(interval);
-  }, [order.server_id]);
+    
+    if (isLiveMonitoring) {
+      intervalRef.current = setInterval(fetchServerStatus, REFRESH_INTERVAL);
+    }
+    
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, [order.server_id, isLiveMonitoring]);
+
+  // Toggle live monitoring
+  const toggleLiveMonitoring = () => {
+    setIsLiveMonitoring(prev => !prev);
+    if (!isLiveMonitoring) {
+      fetchServerStatus();
+    }
+  };
 
   const handleServerAction = async (action: 'start' | 'stop' | 'restart' | 'kill') => {
     if (!order.server_id) return;
@@ -195,6 +220,10 @@ const ServerControlPanel = ({ order, panelUrl, onClose, onRefresh }: ServerContr
               <TabsTrigger value="overview" className="data-[state=active]:bg-primary/10">
                 <Activity className="w-4 h-4 mr-2" />
                 Overview
+              </TabsTrigger>
+              <TabsTrigger value="resources" className="data-[state=active]:bg-primary/10">
+                <Gauge className="w-4 h-4 mr-2" />
+                Resources
               </TabsTrigger>
               <TabsTrigger value="console" className="data-[state=active]:bg-primary/10">
                 <Terminal className="w-4 h-4 mr-2" />
@@ -326,6 +355,47 @@ const ServerControlPanel = ({ order, panelUrl, onClose, onRefresh }: ServerContr
                 >
                   <ExternalLink className="w-4 h-4 mr-2" />
                   Open Full Panel
+                </Button>
+              )}
+            </TabsContent>
+
+            <TabsContent value="resources" className="mt-0 space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Real-Time Resource Usage</h3>
+                <Button
+                  variant={isLiveMonitoring ? "default" : "outline"}
+                  size="sm"
+                  onClick={toggleLiveMonitoring}
+                >
+                  {isLiveMonitoring ? (
+                    <>
+                      <span className="relative flex h-2 w-2 mr-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                      </span>
+                      Live
+                    </>
+                  ) : (
+                    'Enable Live'
+                  )}
+                </Button>
+              </div>
+              
+              <ServerResourceMonitor 
+                resources={serverStatus?.resources || null}
+                limits={order.server_details?.limits}
+                isLive={isLiveMonitoring}
+              />
+              
+              {/* Go to Panel for detailed stats */}
+              {panelUrl && order.server_id && (
+                <Button 
+                  variant="outline"
+                  className="w-full" 
+                  onClick={() => window.open(`${panelUrl}/server/${order.server_id}`, '_blank')}
+                >
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  View Detailed Stats in Panel
                 </Button>
               )}
             </TabsContent>

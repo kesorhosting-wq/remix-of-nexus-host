@@ -451,6 +451,26 @@ async function createServer(
     })
     .eq("id", orderId);
 
+  // Send email with panel credentials if this is a new panel user
+  if (panelCredentials) {
+    try {
+      console.log("Sending panel credentials email to:", userEmail);
+      const emailResponse = await supabase.functions.invoke('send-email', {
+        body: {
+          action: 'panel-credentials',
+          to: userEmail,
+          panelCredentials: panelCredentials,
+          panelUrl: apiUrl,
+          serverName: serverName,
+        }
+      });
+      console.log("Email sent:", emailResponse);
+    } catch (emailErr) {
+      console.error("Failed to send credentials email (non-blocking):", emailErr);
+      // Don't fail the server creation if email fails
+    }
+  }
+
   return {
     success: true,
     serverId: serverId,

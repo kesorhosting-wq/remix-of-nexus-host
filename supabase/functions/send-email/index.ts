@@ -289,6 +289,20 @@ serve(async (req) => {
         });
       }
 
+      case "panel-credentials": {
+        const { panelCredentials, panelUrl, serverName } = body;
+        
+        if (!to) throw new Error("Recipient email not provided");
+        if (!panelCredentials) throw new Error("Panel credentials not provided");
+        
+        const html = generatePanelCredentialsEmail(panelCredentials, panelUrl, serverName, settings.from_name);
+        await sendEmail(settings, to, "Your Game Panel Login Credentials", html);
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }
@@ -792,6 +806,76 @@ function generateServiceReactivatedEmail(order: any, brandName: string): string 
         </div>
         <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
           ${brandName} • Thank you for your continued support
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generatePanelCredentialsEmail(
+  credentials: { email: string; username: string; password: string },
+  panelUrl: string,
+  serverName: string,
+  brandName: string
+): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 80px; height: 80px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 40px;">🎮</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px;">Your Server is Ready!</h1>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Great news! Your game server <strong>${serverName}</strong> has been provisioned and is ready to use.
+          </p>
+          
+          <div style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #bae6fd;">
+            <h3 style="margin: 0 0 16px 0; color: #0369a1;">🔐 Your Panel Login Credentials</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 12px 0; color: #0c4a6e; border-bottom: 1px solid #e0f2fe;">Email</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #0369a1; font-family: monospace; border-bottom: 1px solid #e0f2fe;">${credentials.email}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: #0c4a6e; border-bottom: 1px solid #e0f2fe;">Username</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #0369a1; font-family: monospace; border-bottom: 1px solid #e0f2fe;">${credentials.username}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: #0c4a6e;">Password</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #0369a1; font-family: monospace;">${credentials.password}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <div style="background: #fef3c7; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #f59e0b;">
+            <p style="margin: 0; color: #92400e; font-size: 14px;">
+              <strong>🔒 Security Tip:</strong> We recommend changing your password after your first login. You can also reset it anytime from your client area.
+            </p>
+          </div>
+          
+          <a href="${panelUrl}" style="display: block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin-top: 24px;">
+            Login to Game Panel
+          </a>
+          
+          <p style="color: #6b7280; font-size: 14px; line-height: 1.6; margin-top: 24px;">
+            If the button doesn't work, copy and paste this link into your browser:
+          </p>
+          <p style="color: #6366f1; word-break: break-all; font-size: 14px;">
+            ${panelUrl}
+          </p>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Premium Game Hosting
         </p>
       </div>
     </body>

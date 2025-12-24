@@ -807,6 +807,22 @@ async function resetUserPassword(apiUrl: string, headers: Record<string, string>
 
   console.log("Password reset successful for user:", userId);
 
+  // Send email notification with new credentials
+  try {
+    console.log("Sending password reset email to:", email);
+    await supabase.functions.invoke('send-email', {
+      body: {
+        action: 'panel-password-reset',
+        to: email,
+        newPassword: newPassword,
+        panelUrl: apiUrl,
+      }
+    });
+    console.log("Password reset email sent successfully");
+  } catch (emailErr) {
+    console.error("Failed to send password reset email (non-blocking):", emailErr);
+  }
+
   return {
     success: true,
     message: "Password reset successful",

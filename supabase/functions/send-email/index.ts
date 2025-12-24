@@ -303,6 +303,20 @@ serve(async (req) => {
         });
       }
 
+      case "panel-password-reset": {
+        const { newPassword, panelUrl } = body;
+        
+        if (!to) throw new Error("Recipient email not provided");
+        if (!newPassword) throw new Error("New password not provided");
+        
+        const html = generatePanelPasswordResetEmail(to, newPassword, panelUrl, settings.from_name);
+        await sendEmail(settings, to, "Your Game Panel Password Has Been Reset", html);
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }
@@ -873,6 +887,65 @@ function generatePanelCredentialsEmail(
           <p style="color: #6366f1; word-break: break-all; font-size: 14px;">
             ${panelUrl}
           </p>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Premium Game Hosting
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generatePanelPasswordResetEmail(
+  email: string,
+  newPassword: string,
+  panelUrl: string,
+  brandName: string
+): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 60px; height: 60px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 30px;">🔑</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px;">Password Reset Complete</h1>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Your game panel password has been successfully reset. Here are your new login credentials:
+          </p>
+          
+          <div style="background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #fcd34d;">
+            <h3 style="margin: 0 0 16px 0; color: #92400e;">🔐 New Login Credentials</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 12px 0; color: #78350f; border-bottom: 1px solid #fcd34d;">Email</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #92400e; font-family: monospace; border-bottom: 1px solid #fcd34d;">${email}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: #78350f;">New Password</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #92400e; font-family: monospace;">${newPassword}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <div style="background: #fef2f2; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #ef4444;">
+            <p style="margin: 0; color: #991b1b; font-size: 14px;">
+              <strong>⚠️ Didn't request this?</strong> If you didn't reset your password, please contact support immediately as your account may be compromised.
+            </p>
+          </div>
+          
+          <a href="${panelUrl}" style="display: block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin-top: 24px;">
+            Login to Game Panel
+          </a>
         </div>
         <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
           ${brandName} • Premium Game Hosting

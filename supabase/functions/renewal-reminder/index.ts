@@ -30,6 +30,13 @@ serve(async (req) => {
         });
       }
 
+      case "send-reminders": {
+        const result = await sendPaymentReminders(supabase);
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       case "get-pending": {
         const result = await getPendingReminders(supabase);
         return new Response(JSON.stringify(result), {
@@ -40,6 +47,19 @@ serve(async (req) => {
       case "auto-suspend": {
         const result = await autoSuspendOverdue(supabase);
         return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "daily-job": {
+        // Combined action for cron job: send reminders + auto-suspend
+        const reminderResult = await sendPaymentReminders(supabase);
+        const suspendResult = await autoSuspendOverdue(supabase);
+        return new Response(JSON.stringify({
+          success: true,
+          reminders: reminderResult,
+          suspensions: suspendResult,
+        }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
@@ -119,6 +139,99 @@ async function checkUpcomingRenewals(supabase: any) {
       sevenDays: reminders.filter(r => r.daysUntilDue === 7).length,
       threeDays: reminders.filter(r => r.daysUntilDue === 3).length,
       oneDay: reminders.filter(r => r.daysUntilDue === 1).length,
+    },
+  };
+}
+
+async function sendPaymentReminders(supabase: any) {
+  console.log("Sending payment reminder emails...");
+
+  const now = new Date();
+  const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  // Get unpaid invoices due within 7 days
+  const { data: invoices, error: invoicesError } = await supabase
+    .from("invoices")
+    .select("*, orders(server_details, products(name))")
+    .eq("status", "unpaid")
+    .gte("due_date", now.toISOString())
+    .lte("due_date", sevenDaysFromNow.toISOString());
+
+  if (invoicesError) {
+    console.error("Error fetching invoices:", invoicesError);
+    throw new Error("Failed to fetch invoices");
+  }
+
+  const emailsSent: any[] = [];
+  const errors: any[] = [];
+
+  for (const invoice of invoices || []) {
+    const dueDate = new Date(invoice.due_date);
+    const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+
+    // Send reminders at 7, 3, and 1 day(s) before due date
+    const shouldRemind = daysUntilDue === 7 || daysUntilDue === 3 || daysUntilDue === 1;
+
+    if (shouldRemind) {
+      // Get user email
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("email")
+        .eq("user_id", invoice.user_id)
+        .single();
+
+      if (!profile?.email) {
+        console.log(`No email found for user ${invoice.user_id}`);
+        continue;
+      }
+
+      const serverName = invoice.orders?.server_details?.plan_name || 
+                        invoice.orders?.products?.name || 
+                        "Game Server";
+      const paymentUrl = `${Deno.env.get("SITE_URL") || "https://your-site.com"}/client`;
+
+      try {
+        await supabase.functions.invoke("send-email", {
+          body: {
+            action: "payment-reminder",
+            to: profile.email,
+            invoiceNumber: invoice.invoice_number,
+            serverName,
+            dueDate: invoice.due_date,
+            amount: invoice.total,
+            daysUntilDue,
+            paymentUrl,
+          },
+        });
+
+        emailsSent.push({
+          invoiceNumber: invoice.invoice_number,
+          email: profile.email,
+          daysUntilDue,
+        });
+        console.log(`Reminder sent to ${profile.email} for invoice ${invoice.invoice_number} (${daysUntilDue} days until due)`);
+      } catch (emailError: any) {
+        console.error(`Failed to send reminder for invoice ${invoice.invoice_number}:`, emailError);
+        errors.push({
+          invoiceNumber: invoice.invoice_number,
+          error: emailError.message,
+        });
+      }
+    }
+  }
+
+  return {
+    success: true,
+    checkedAt: now.toISOString(),
+    totalInvoicesChecked: invoices?.length || 0,
+    emailsSentCount: emailsSent.length,
+    emailsSent,
+    errorsCount: errors.length,
+    errors,
+    breakdown: {
+      sevenDays: emailsSent.filter(e => e.daysUntilDue === 7).length,
+      threeDays: emailsSent.filter(e => e.daysUntilDue === 3).length,
+      oneDay: emailsSent.filter(e => e.daysUntilDue === 1).length,
     },
   };
 }

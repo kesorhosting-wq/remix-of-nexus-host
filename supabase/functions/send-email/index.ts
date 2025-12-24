@@ -330,6 +330,24 @@ serve(async (req) => {
         });
       }
 
+      case "payment-reminder": {
+        const { invoiceNumber, serverName, dueDate, amount, daysUntilDue, paymentUrl } = body;
+        
+        if (!to) throw new Error("Recipient email not provided");
+        
+        const urgency = daysUntilDue <= 1 ? "urgent" : daysUntilDue <= 3 ? "warning" : "notice";
+        const html = generatePaymentReminderEmail(invoiceNumber, serverName, dueDate, amount, daysUntilDue, paymentUrl, urgency, settings.from_name);
+        
+        const subjectPrefix = daysUntilDue <= 1 ? "🚨 URGENT:" : daysUntilDue <= 3 ? "⚠️" : "📋";
+        const subject = `${subjectPrefix} Payment Due ${daysUntilDue === 1 ? "Tomorrow" : `in ${daysUntilDue} Days`} - Invoice #${invoiceNumber}`;
+        
+        await sendEmail(settings, to, subject, html);
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }
@@ -1052,6 +1070,124 @@ function generateServerSuspendedOverdueEmail(
         </div>
         <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
           ${brandName} • Automated Billing System
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generatePaymentReminderEmail(
+  invoiceNumber: string,
+  serverName: string,
+  dueDate: string,
+  amount: number,
+  daysUntilDue: number,
+  paymentUrl: string,
+  urgency: "urgent" | "warning" | "notice",
+  brandName: string
+): string {
+  const formattedDate = new Date(dueDate).toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+  
+  const colors = {
+    urgent: { bg: "#dc2626", bgLight: "#fef2f2", border: "#fecaca", text: "#991b1b" },
+    warning: { bg: "#f59e0b", bgLight: "#fffbeb", border: "#fcd34d", text: "#92400e" },
+    notice: { bg: "#6366f1", bgLight: "#eef2ff", border: "#c7d2fe", text: "#4338ca" }
+  };
+  
+  const color = colors[urgency];
+  
+  const urgencyMessages = {
+    urgent: {
+      icon: "🚨",
+      title: "Payment Due Tomorrow!",
+      subtitle: "Immediate action required to avoid service suspension",
+      warning: "Your server will be automatically suspended if payment is not received by the due date."
+    },
+    warning: {
+      icon: "⚠️",
+      title: "Payment Due in " + daysUntilDue + " Days",
+      subtitle: "Please pay soon to avoid service interruption",
+      warning: "To avoid suspension, please ensure payment is made before the due date."
+    },
+    notice: {
+      icon: "📋",
+      title: "Payment Due in " + daysUntilDue + " Days",
+      subtitle: "Friendly reminder about your upcoming payment",
+      warning: "This is a friendly reminder. No action is needed if you have auto-pay enabled."
+    }
+  };
+  
+  const msg = urgencyMessages[urgency];
+  
+  const warningSection = urgency !== "notice" ? `
+    <div style="background: #fef3c7; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #f59e0b;">
+      <p style="margin: 0; color: #92400e; font-size: 14px;">
+        <strong>⚠️ Note:</strong> ${msg.warning}
+      </p>
+    </div>
+  ` : "";
+  
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, ${color.bg} 0%, ${color.bg}dd 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 60px; height: 60px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 30px;">${msg.icon}</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 24px;">${msg.title}</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 14px;">${msg.subtitle}</p>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Hi there! This is a reminder that your invoice for <strong>${serverName}</strong> is due soon.
+          </p>
+          
+          <div style="background: ${color.bgLight}; border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid ${color.border};">
+            <h3 style="margin: 0 0 16px 0; color: ${color.text};">📄 Invoice Details</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 12px 0; color: ${color.text}; border-bottom: 1px solid ${color.border};">Invoice #</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: ${color.text}; font-family: monospace; border-bottom: 1px solid ${color.border};">${invoiceNumber}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: ${color.text}; border-bottom: 1px solid ${color.border};">Service</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: ${color.text}; border-bottom: 1px solid ${color.border};">${serverName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: ${color.text}; border-bottom: 1px solid ${color.border};">Due Date</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: ${color.text}; border-bottom: 1px solid ${color.border};">${formattedDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: ${color.text};">Amount Due</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 700; color: ${color.bg}; font-size: 20px;">$${amount.toFixed(2)}</td>
+              </tr>
+            </table>
+          </div>
+          
+          ${warningSection}
+          
+          <a href="${paymentUrl}" style="display: block; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; text-decoration: none; padding: 18px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin-top: 24px; font-size: 16px;">
+            💳 Pay Invoice Now
+          </a>
+          
+          <p style="text-align: center; color: #6b7280; font-size: 13px; margin-top: 20px;">
+            Questions? <a href="${paymentUrl.replace('/client', '/client/tickets')}" style="color: #6366f1;">Contact our support team</a>
+          </p>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Automated Billing Reminder
         </p>
       </div>
     </body>

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -28,6 +29,46 @@ async function getSMTPSettings(supabase: any) {
   return data;
 }
 
+async function sendEmailViaSMTP(
+  settings: any,
+  to: string,
+  subject: string,
+  html: string
+): Promise<{ success: boolean; messageId?: string }> {
+  console.log(`Sending email via SMTP to: ${to}`);
+  console.log(`SMTP Host: ${settings.host}:${settings.port}`);
+  
+  const client = new SMTPClient({
+    connection: {
+      hostname: settings.host,
+      port: settings.port,
+      tls: settings.encryption === "ssl",
+      auth: {
+        username: settings.username,
+        password: settings.password,
+      },
+    },
+  });
+
+  try {
+    await client.send({
+      from: `${settings.from_name} <${settings.from_email}>`,
+      to: to,
+      subject: subject,
+      content: "Please view this email in an HTML-enabled client.",
+      html: html,
+    });
+
+    await client.close();
+    console.log(`Email sent successfully via SMTP to ${to}`);
+    return { success: true };
+  } catch (error: any) {
+    console.error("SMTP send error:", error);
+    await client.close();
+    throw error;
+  }
+}
+
 async function sendEmail(
   settings: any, 
   to: string, 
@@ -42,25 +83,36 @@ async function sendEmail(
   
   const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
   
-  // Use Resend's default domain for testing, or a verified custom domain if configured
-  const publicDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com'];
-  const emailDomain = settings.from_email.split('@')[1]?.toLowerCase();
-  const isPublicDomain = publicDomains.includes(emailDomain);
-  
-  const fromEmail = isPublicDomain 
-    ? `${settings.from_name} <onboarding@resend.dev>` 
-    : `${settings.from_name} <${settings.from_email}>`;
-  
-  console.log(`From: ${fromEmail}`);
-  if (isPublicDomain) {
-    console.log(`Note: Using Resend default sender (${settings.from_email} is a public domain). Add your domain at https://resend.com/domains for custom sender.`);
-  }
-  
-  let status = 'sent';
-  let errorMessage = null;
+  // Check if SMTP is fully configured (has host, username, password)
+  const hasFullSMTP = settings.host && settings.username && settings.password;
   
   try {
+    // Priority 1: Use direct SMTP if fully configured
+    if (hasFullSMTP) {
+      console.log("Using direct SMTP for email delivery");
+      const result = await sendEmailViaSMTP(settings, to, subject, html);
+      await logEmail(supabase, action, to, subject, 'sent', null, { ...metadata, method: 'smtp' });
+      return result;
+    }
+    
+    // Priority 2: Use Resend API if available
     if (RESEND_API_KEY) {
+      console.log("Using Resend API for email delivery");
+      
+      // Use Resend's default domain for testing, or a verified custom domain if configured
+      const publicDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com'];
+      const emailDomain = settings.from_email.split('@')[1]?.toLowerCase();
+      const isPublicDomain = publicDomains.includes(emailDomain);
+      
+      const fromEmail = isPublicDomain 
+        ? `${settings.from_name} <onboarding@resend.dev>` 
+        : `${settings.from_name} <${settings.from_email}>`;
+      
+      console.log(`From: ${fromEmail}`);
+      if (isPublicDomain) {
+        console.log(`Note: Using Resend default sender. Add your domain at https://resend.com/domains for custom sender.`);
+      }
+      
       const response = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
@@ -78,29 +130,22 @@ async function sendEmail(
       
       if (!response.ok) {
         const error = await response.text();
-        status = 'failed';
-        errorMessage = error;
         throw new Error(`Failed to send email: ${error}`);
       }
       
       const result = await response.json();
-      
-      // Log successful email
-      await logEmail(supabase, action, to, subject, 'sent', null, { ...metadata, resendId: result.id });
-      
+      await logEmail(supabase, action, to, subject, 'sent', null, { ...metadata, resendId: result.id, method: 'resend' });
       return result;
     }
     
     // Fallback: Log the email (useful for development)
-    console.log("Email would be sent (no RESEND_API_KEY configured):");
+    console.log("Email would be sent (no SMTP or Resend configured):");
     console.log({ to, subject, html: html.substring(0, 200) + "..." });
     
-    // Log simulated email
-    await logEmail(supabase, action, to, subject, 'simulated', null, metadata);
-    
-    return { success: true, message: "Email logged (configure RESEND_API_KEY for actual sending)" };
+    await logEmail(supabase, action, to, subject, 'simulated', null, { ...metadata, method: 'simulated' });
+    return { success: true, message: "Email logged (configure SMTP or RESEND_API_KEY for actual sending)" };
   } catch (error: any) {
-    // Log failed email
+    console.error("Email send error:", error);
     await logEmail(supabase, action, to, subject, 'failed', error.message, metadata);
     throw error;
   }

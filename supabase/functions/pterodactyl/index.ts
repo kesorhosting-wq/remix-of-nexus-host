@@ -738,20 +738,82 @@ async function terminateServer(apiUrl: string, headers: Record<string, string>, 
 }
 
 async function getServerStatus(apiUrl: string, headers: Record<string, string>, serverId: string) {
+  // First, get server details from Application API to check if server exists
   const serverResponse = await fetch(
-    `${apiUrl}/api/client/servers/${serverId}/resources`,
+    `${apiUrl}/api/application/servers/external/${serverId}`,
     { headers }
   );
 
   if (!serverResponse.ok) {
-    throw new Error(`Failed to get server status: ${serverResponse.statusText}`);
+    if (serverResponse.status === 404) {
+      return {
+        success: false,
+        status: "not_found",
+        error: "Server not found in Pterodactyl panel",
+        resources: null,
+      };
+    }
+    throw new Error(`Failed to get server info: ${serverResponse.statusText}`);
   }
 
-  const data = await serverResponse.json();
+  const serverData = await serverResponse.json();
+  const serverInfo = serverData.attributes;
+  
+  // Check if server is suspended at the application level
+  const isSuspended = serverInfo.suspended || serverInfo.status === "suspended";
+  
+  // Try to get resources from client API - but this may fail if we don't have client API access
+  // The Application API key doesn't work with client endpoints, so we'll use application data
+  let currentState = "unknown";
+  let resources = null;
+  
+  // Use websocket connection status from application API if available
+  if (isSuspended) {
+    currentState = "suspended";
+  } else {
+    // Try client API with a timeout - it may work if the API key has client permissions
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      const resourcesResponse = await fetch(
+        `${apiUrl}/api/client/servers/${serverId}/resources`,
+        { 
+          headers,
+          signal: controller.signal 
+        }
+      );
+      
+      clearTimeout(timeoutId);
+      
+      if (resourcesResponse.ok) {
+        const resourcesData = await resourcesResponse.json();
+        currentState = resourcesData.attributes.current_state;
+        resources = resourcesData.attributes.resources;
+      } else {
+        // Client API failed, use application data
+        currentState = serverInfo.status || "unknown";
+      }
+    } catch (err) {
+      // Client API not accessible, use application data
+      console.log("Client API not accessible, using application data");
+      currentState = isSuspended ? "suspended" : (serverInfo.status || "active");
+    }
+  }
+
   return {
     success: true,
-    status: data.attributes.current_state,
-    resources: data.attributes.resources,
+    status: currentState,
+    suspended: isSuspended,
+    serverInfo: {
+      id: serverInfo.id,
+      uuid: serverInfo.uuid,
+      identifier: serverInfo.identifier,
+      name: serverInfo.name,
+      limits: serverInfo.limits,
+      featureLimits: serverInfo.feature_limits,
+    },
+    resources: resources,
   };
 }
 

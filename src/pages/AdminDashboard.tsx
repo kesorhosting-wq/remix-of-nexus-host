@@ -146,6 +146,7 @@ const AdminDashboard = () => {
   const [orderStatusFilter, setOrderStatusFilter] = useState<string>("all");
   const [runningDailyJob, setRunningDailyJob] = useState(false);
   const [dailyJobResult, setDailyJobResult] = useState<any>(null);
+  const [unsuspendingOrder, setUnsuspendingOrder] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -497,6 +498,93 @@ const AdminDashboard = () => {
     }
   };
 
+  const handleUnsuspendServer = async (order: Order) => {
+    if (order.status !== "suspended") {
+      toast({ title: "Order is not suspended", variant: "destructive" });
+      return;
+    }
+
+    setUnsuspendingOrder(order.id);
+    try {
+      // Unsuspend in Pterodactyl if server exists
+      if (order.server_id) {
+        const { error: unsuspendError } = await supabase.functions.invoke("pterodactyl", {
+          body: { action: "unsuspend", serverId: order.server_id }
+        });
+        if (unsuspendError) {
+          console.error("Failed to unsuspend in panel:", unsuspendError);
+          toast({ title: "Warning: Failed to unsuspend server in panel", variant: "destructive" });
+        }
+      }
+
+      // Update order status to active
+      const { error } = await supabase.from("orders").update({ status: "active" }).eq("id", order.id);
+      if (error) throw error;
+
+      // Send reactivation email notification
+      try {
+        await supabase.functions.invoke("send-email", {
+          body: { action: "service-reactivated", orderId: order.id }
+        });
+        console.log("Reactivation email sent");
+      } catch (emailErr) {
+        console.error("Failed to send reactivation email:", emailErr);
+      }
+
+      toast({ title: "Server unsuspended successfully!" });
+      fetchData();
+    } catch (error: any) {
+      console.error("Unsuspend error:", error);
+      toast({ title: "Failed to unsuspend server", description: error.message, variant: "destructive" });
+    } finally {
+      setUnsuspendingOrder(null);
+    }
+  };
+
+  const handleBulkUnsuspend = async () => {
+    const suspendedSelected = orders.filter(o => selectedOrders.has(o.id) && o.status === "suspended");
+    if (suspendedSelected.length === 0) {
+      toast({ title: "No suspended orders selected", variant: "destructive" });
+      return;
+    }
+    
+    setBulkActionLoading(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const order of suspendedSelected) {
+      try {
+        // Unsuspend in Pterodactyl if server exists
+        if (order.server_id) {
+          await supabase.functions.invoke("pterodactyl", {
+            body: { action: "unsuspend", serverId: order.server_id }
+          });
+        }
+
+        // Update status in database
+        await supabase.from("orders").update({ status: "active" }).eq("id", order.id);
+
+        // Send reactivation email
+        await supabase.functions.invoke("send-email", {
+          body: { action: "service-reactivated", orderId: order.id }
+        });
+
+        successCount++;
+      } catch (err) {
+        console.error(`Failed to unsuspend order ${order.id}:`, err);
+        failCount++;
+      }
+    }
+
+    toast({ 
+      title: `Bulk unsuspend complete`, 
+      description: `${successCount} unsuspended, ${failCount} failed` 
+    });
+    setSelectedOrders(new Set());
+    fetchData();
+    setBulkActionLoading(false);
+  };
+
   const handleUpdateInvoiceStatus = async (invoiceId: string, status: string) => {
     try {
       const updates: any = { status };
@@ -742,6 +830,10 @@ const AdminDashboard = () => {
               <Package className="w-4 h-4" />
               Orders ({orders.length})
             </TabsTrigger>
+            <TabsTrigger value="suspended" className="gap-2">
+              <Pause className="w-4 h-4" />
+              Suspended ({orders.filter(o => o.status === "suspended").length})
+            </TabsTrigger>
             <TabsTrigger value="invoices" className="gap-2">
               <FileText className="w-4 h-4" />
               Invoices ({invoices.length})
@@ -983,6 +1075,182 @@ const AdminDashboard = () => {
                     ))}
                   </TableBody>
                 </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Suspended Servers Tab */}
+          <TabsContent value="suspended">
+            <Card>
+              <CardHeader>
+                <div className="flex justify-between items-center flex-wrap gap-4">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Pause className="w-5 h-5 text-orange-500" />
+                      Suspended Servers
+                    </CardTitle>
+                    <CardDescription>
+                      Servers suspended due to non-payment or manual action. Click unsuspend to reactivate.
+                    </CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {orders.filter(o => o.status === "suspended" && selectedOrders.has(o.id)).length > 0 && (
+                      <Button 
+                        onClick={handleBulkUnsuspend} 
+                        disabled={bulkActionLoading}
+                        className="gap-2"
+                      >
+                        {bulkActionLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Play className="w-4 h-4" />
+                        )}
+                        Unsuspend Selected ({orders.filter(o => o.status === "suspended" && selectedOrders.has(o.id)).length})
+                      </Button>
+                    )}
+                    <Button variant="outline" size="sm" onClick={fetchData}>
+                      <RefreshCw className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {orders.filter(o => o.status === "suspended").length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <CheckCircle className="w-12 h-12 mx-auto mb-4 text-green-500/50" />
+                    <p className="text-lg font-medium">No Suspended Servers</p>
+                    <p className="text-sm">All servers are currently active.</p>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-10">
+                          <Checkbox 
+                            checked={orders.filter(o => o.status === "suspended").every(o => selectedOrders.has(o.id))}
+                            onCheckedChange={() => {
+                              const suspendedOrders = orders.filter(o => o.status === "suspended");
+                              const allSelected = suspendedOrders.every(o => selectedOrders.has(o.id));
+                              if (allSelected) {
+                                setSelectedOrders(prev => {
+                                  const newSet = new Set(prev);
+                                  suspendedOrders.forEach(o => newSet.delete(o.id));
+                                  return newSet;
+                                });
+                              } else {
+                                setSelectedOrders(prev => {
+                                  const newSet = new Set(prev);
+                                  suspendedOrders.forEach(o => newSet.add(o.id));
+                                  return newSet;
+                                });
+                              }
+                            }}
+                          />
+                        </TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Server</TableHead>
+                        <TableHead>Server ID</TableHead>
+                        <TableHead>Price</TableHead>
+                        <TableHead>Due Date</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {orders
+                        .filter(order => order.status === "suspended")
+                        .map((order) => (
+                        <TableRow key={order.id} className={selectedOrders.has(order.id) ? "bg-muted/50" : ""}>
+                          <TableCell>
+                            <Checkbox 
+                              checked={selectedOrders.has(order.id)}
+                              onCheckedChange={() => toggleOrderSelection(order.id)}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <div>
+                              <p className="font-medium">{order.user_email || "N/A"}</p>
+                              <p className="text-xs text-muted-foreground font-mono">{order.id.slice(0, 8)}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div>
+                              <p>{order.server_details?.name || order.server_details?.plan_name || "N/A"}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {order.server_details?.game_name || order.billing_cycle}
+                              </p>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {order.server_id ? (
+                              <code className="text-xs bg-muted px-2 py-1 rounded">{order.server_id}</code>
+                            ) : (
+                              <span className="text-muted-foreground">No server</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="font-medium">${order.price.toFixed(2)}</TableCell>
+                          <TableCell>
+                            {order.server_details?.next_due_date ? (
+                              <span className="text-red-500">
+                                {format(new Date(order.server_details.next_due_date), "PP")}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                onClick={() => handleUnsuspendServer(order)}
+                                disabled={unsuspendingOrder === order.id}
+                                className="gap-1"
+                              >
+                                {unsuspendingOrder === order.id ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Play className="w-4 h-4" />
+                                )}
+                                Unsuspend
+                              </Button>
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button size="sm" variant="destructive">
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Terminate Service</AlertDialogTitle>
+                                    <AlertDialogDescription asChild>
+                                      <div>
+                                        Are you sure you want to permanently delete this suspended service? This will:
+                                        <ul className="list-disc list-inside mt-2 space-y-1">
+                                          {order.server_id && <li>Terminate the server in Pterodactyl panel</li>}
+                                          <li>Delete all related invoices</li>
+                                          <li>Send termination email to customer</li>
+                                        </ul>
+                                        <p className="mt-2 font-semibold text-destructive">This action cannot be undone.</p>
+                                      </div>
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={() => handleDeleteOrder(order)}
+                                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                    >
+                                      Terminate
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

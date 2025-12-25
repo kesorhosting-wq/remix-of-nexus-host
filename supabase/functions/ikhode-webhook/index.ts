@@ -126,20 +126,9 @@ serve(async (req) => {
         gateway_response: payload,
       });
 
-      // Update order status if exists
-      if (invoice.order_id) {
-        await supabase
-          .from("orders")
-          .update({ 
-            status: "paid",
-            notes: `Payment confirmed via KHQR Gateway. Transaction: ${transactionId}`
-          })
-          .eq("id", invoice.order_id);
-      }
-
       console.log(`[Webhook] Payment successfully added for Invoice #${invoice.id}`);
 
-      // 7. Trigger server provisioning if order exists
+      // 7. Handle order - either renew (if suspended/active) or provision (if pending/paid)
       if (invoice.order_id) {
         try {
           const { data: order } = await supabase
@@ -149,27 +138,82 @@ serve(async (req) => {
             .single();
 
           if (order) {
-            console.log(`[Webhook] Triggering server provisioning for order: ${order.id}`);
-            const { error: provisionError } = await supabase.functions.invoke("pterodactyl", {
-              body: { 
-                action: "create", 
-                orderId: order.id, 
-                serverDetails: order.server_details 
-              },
-            });
+            console.log(`[Webhook] Order status: ${order.status}`);
+            
+            // If server is suspended, unsuspend and renew the service
+            if (order.status === "suspended") {
+              console.log(`[Webhook] Order is suspended, triggering renewal/unsuspension for order: ${order.id}`);
+              
+              try {
+                const { error: renewError } = await supabase.functions.invoke("renewal-reminder", {
+                  body: { 
+                    action: "renew", 
+                    orderId: order.id,
+                    paymentId: transactionId
+                  },
+                });
 
-            if (provisionError) {
-              console.error("[Webhook] Provisioning error:", provisionError);
-            } else {
-              console.log(`[Webhook] Server provisioning started`);
+                if (renewError) {
+                  console.error("[Webhook] Renewal/unsuspension error:", renewError);
+                } else {
+                  console.log(`[Webhook] Server unsuspended and renewed successfully`);
+                }
+              } catch (renewErr) {
+                console.error("[Webhook] Renewal call error:", renewErr);
+              }
+            } 
+            // If order is active, just update next_due_date (renewal payment)
+            else if (order.status === "active" && order.server_id) {
+              console.log(`[Webhook] Renewing active order: ${order.id}`);
+              
+              try {
+                const { error: renewError } = await supabase.functions.invoke("renewal-reminder", {
+                  body: { 
+                    action: "renew", 
+                    orderId: order.id,
+                    paymentId: transactionId
+                  },
+                });
+
+                if (renewError) {
+                  console.error("[Webhook] Renewal error:", renewError);
+                } else {
+                  console.log(`[Webhook] Service renewed successfully`);
+                }
+              } catch (renewErr) {
+                console.error("[Webhook] Renewal call error:", renewErr);
+              }
+            }
+            // If pending, trigger new server provisioning
+            else if (order.status === "pending" || order.status === "paid") {
+              console.log(`[Webhook] Triggering server provisioning for order: ${order.id}`);
+              
+              // Update order status first
               await supabase
                 .from("orders")
-                .update({ status: "provisioning" })
+                .update({ 
+                  status: "paid",
+                  notes: `Payment confirmed via KHQR Gateway. Transaction: ${transactionId}`
+                })
                 .eq("id", order.id);
+              
+              const { error: provisionError } = await supabase.functions.invoke("pterodactyl", {
+                body: { 
+                  action: "create", 
+                  orderId: order.id, 
+                  serverDetails: order.server_details 
+                },
+              });
+
+              if (provisionError) {
+                console.error("[Webhook] Provisioning error:", provisionError);
+              } else {
+                console.log(`[Webhook] Server provisioning started`);
+              }
             }
           }
-        } catch (pterodactylError) {
-          console.error("[Webhook] Pterodactyl call error:", pterodactylError);
+        } catch (orderError) {
+          console.error("[Webhook] Order handling error:", orderError);
         }
       }
 

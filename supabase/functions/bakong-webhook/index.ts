@@ -157,16 +157,6 @@ serve(async (req) => {
     }
 
     if (status === "SUCCESS") {
-      // Update order status
-      const { error: orderUpdateError } = await supabase
-        .from("orders")
-        .update({ status: "paid" })
-        .eq("id", transactionId);
-
-      if (orderUpdateError) {
-        console.error("Error updating order:", orderUpdateError);
-      }
-
       // Update invoice status
       const { error: invoiceError } = await supabase
         .from("invoices")
@@ -182,31 +172,94 @@ serve(async (req) => {
         console.error("Error updating invoice:", invoiceError);
       }
 
-      console.log("Payment successful, order updated:", transactionId);
+      console.log("Payment successful, processing order:", transactionId);
+      console.log("Order status:", order.status);
 
-      // Trigger server provisioning
-      try {
-        const pterodactylResponse = await fetch(
-          `${SUPABASE_URL}/functions/v1/pterodactyl`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-            },
-            body: JSON.stringify({
-              action: "create",
-              orderId: transactionId,
-              serverDetails: order.server_details,
-            }),
-          }
-        );
+      // Handle based on order status
+      if (order.status === "suspended") {
+        // Unsuspend and renew the service
+        console.log("Order is suspended, triggering renewal/unsuspension");
+        
+        try {
+          const renewResponse = await fetch(
+            `${SUPABASE_URL}/functions/v1/renewal-reminder`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+              },
+              body: JSON.stringify({
+                action: "renew",
+                orderId: transactionId,
+                paymentId: reference || transactionId,
+              }),
+            }
+          );
 
-        const pterodactylResult = await pterodactylResponse.json();
-        console.log("Pterodactyl provisioning result:", pterodactylResult);
-      } catch (provisionError) {
-        console.error("Error triggering server provisioning:", provisionError);
-        // Don't fail the webhook - manual provisioning can be done later
+          const renewResult = await renewResponse.json();
+          console.log("Renewal/unsuspension result:", renewResult);
+        } catch (renewError) {
+          console.error("Error triggering renewal:", renewError);
+        }
+      } else if (order.status === "active" && order.server_id) {
+        // Renew active service (extend due date)
+        console.log("Renewing active service");
+        
+        try {
+          const renewResponse = await fetch(
+            `${SUPABASE_URL}/functions/v1/renewal-reminder`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+              },
+              body: JSON.stringify({
+                action: "renew",
+                orderId: transactionId,
+                paymentId: reference || transactionId,
+              }),
+            }
+          );
+
+          const renewResult = await renewResponse.json();
+          console.log("Renewal result:", renewResult);
+        } catch (renewError) {
+          console.error("Error triggering renewal:", renewError);
+        }
+      } else if (order.status === "pending" || order.status === "paid") {
+        // New order - trigger server provisioning
+        console.log("New order, triggering server provisioning");
+        
+        // Update order status
+        await supabase
+          .from("orders")
+          .update({ status: "paid" })
+          .eq("id", transactionId);
+
+        try {
+          const pterodactylResponse = await fetch(
+            `${SUPABASE_URL}/functions/v1/pterodactyl`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+              },
+              body: JSON.stringify({
+                action: "create",
+                orderId: transactionId,
+                serverDetails: order.server_details,
+              }),
+            }
+          );
+
+          const pterodactylResult = await pterodactylResponse.json();
+          console.log("Pterodactyl provisioning result:", pterodactylResult);
+        } catch (provisionError) {
+          console.error("Error triggering server provisioning:", provisionError);
+        }
       }
     }
 

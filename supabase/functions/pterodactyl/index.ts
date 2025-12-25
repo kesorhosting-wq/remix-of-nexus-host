@@ -274,6 +274,30 @@ async function createServer(
     throw new Error("Order not found");
   }
 
+  // IDEMPOTENCY CHECK: If server already created, skip
+  if (order.server_id) {
+    console.log("Server already exists for order:", orderId, "server_id:", order.server_id);
+    return { 
+      success: true, 
+      serverId: order.server_id, 
+      message: "Server already created",
+      skipped: true 
+    };
+  }
+
+  // Mark order as being processed to prevent race conditions
+  const { error: lockError } = await supabase
+    .from("orders")
+    .update({ status: "provisioning" })
+    .eq("id", orderId)
+    .eq("status", order.status) // Only update if status hasn't changed
+    .is("server_id", null); // Only if no server_id yet
+
+  if (lockError) {
+    console.log("Order already being processed by another request:", orderId);
+    return { success: true, message: "Order already being processed", skipped: true };
+  }
+
   // Get user email - try profile first, then auth.users as backup
   let userEmail = null;
   

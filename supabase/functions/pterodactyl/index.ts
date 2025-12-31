@@ -6,25 +6,132 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 // Use environment variables for Pterodactyl credentials (more secure than database storage)
 const PTERODACTYL_API_URL = Deno.env.get("PTERODACTYL_API_URL");
 const PTERODACTYL_API_KEY = Deno.env.get("PTERODACTYL_API_KEY");
+
+// ============= Authorization Helpers =============
+
+interface AuthResult {
+  user: { id: string; email?: string };
+  isAdmin: boolean;
+}
+
+async function getAuthUser(req: Request): Promise<AuthResult | null> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) return null;
+
+  const token = authHeader.replace("Bearer ", "");
+  const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const { data: { user }, error } = await anonClient.auth.getUser(token);
+  
+  if (error || !user) {
+    console.log("Auth validation failed:", error?.message);
+    return null;
+  }
+
+  const serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const { data: isAdmin } = await serviceClient.rpc("has_role", {
+    _user_id: user.id,
+    _role: "admin",
+  });
+
+  return { user: { id: user.id, email: user.email }, isAdmin: !!isAdmin };
+}
+
+async function requireAdmin(req: Request): Promise<AuthResult> {
+  const auth = await getAuthUser(req);
+  if (!auth) throw new Error("Unauthorized: No valid authentication token");
+  if (!auth.isAdmin) throw new Error("Forbidden: Admin access required");
+  console.log(`Admin access granted for user: ${auth.user.id}`);
+  return auth;
+}
+
+async function requireOrderOwner(req: Request, orderId: string): Promise<AuthResult> {
+  const auth = await getAuthUser(req);
+  if (!auth) throw new Error("Unauthorized: No valid authentication token");
+  if (auth.isAdmin) return auth;
+  
+  const serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const { data: order } = await serviceClient
+    .from("orders")
+    .select("user_id")
+    .eq("id", orderId)
+    .single();
+  
+  if (!order || order.user_id !== auth.user.id) {
+    throw new Error("Forbidden: You don't own this order");
+  }
+  return auth;
+}
+
+// ============= Input Validation =============
+
+const ALLOWED_ACTIONS = ["test", "get-panel-data", "create", "power", "suspend", "unsuspend", "terminate", "status", "reset-password"] as const;
+const ALLOWED_POWER_SIGNALS = ["start", "stop", "restart", "kill"] as const;
+
+function validateAction(action: unknown): typeof ALLOWED_ACTIONS[number] {
+  if (typeof action !== "string" || !ALLOWED_ACTIONS.includes(action as any)) {
+    throw new Error(`Invalid action. Must be one of: ${ALLOWED_ACTIONS.join(", ")}`);
+  }
+  return action as typeof ALLOWED_ACTIONS[number];
+}
+
+function validateUUID(value: unknown, fieldName: string): string {
+  if (typeof value !== "string") throw new Error(`${fieldName} must be a string`);
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(value)) throw new Error(`${fieldName} must be a valid UUID`);
+  return value;
+}
+
+function validateServerId(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 50) {
+    throw new Error("serverId must be a non-empty string");
+  }
+  return value.replace(/[^a-zA-Z0-9-_]/g, ""); // Sanitize
+}
+
+function validateEmail(value: unknown): string {
+  if (typeof value !== "string") throw new Error("email must be a string");
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(value) || value.length > 255) {
+    throw new Error("Invalid email address");
+  }
+  return value;
+}
+
+function validateUrl(value: unknown): string {
+  if (typeof value !== "string") throw new Error("URL must be a string");
+  try {
+    new URL(value);
+  } catch {
+    throw new Error("Invalid URL format");
+  }
+  return value;
+}
+
+function validatePowerSignal(value: unknown): string {
+  if (typeof value !== "string" || !ALLOWED_POWER_SIGNALS.includes(value as any)) {
+    throw new Error(`Invalid power signal. Must be one of: ${ALLOWED_POWER_SIGNALS.join(", ")}`);
+  }
+  return value;
+}
+
+// ============= Pterodactyl Config =============
 
 function getPterodactylConfig() {
   if (!PTERODACTYL_API_URL || !PTERODACTYL_API_KEY) {
     throw new Error("Pterodactyl panel not configured. Please set PTERODACTYL_API_URL and PTERODACTYL_API_KEY secrets.");
   }
   
-  // Normalize URL: remove trailing slash and ensure no /api path is included
   let normalizedUrl = PTERODACTYL_API_URL.trim();
-  // Remove trailing slashes
   while (normalizedUrl.endsWith('/')) {
     normalizedUrl = normalizedUrl.slice(0, -1);
   }
-  // Remove /api or /api/application if accidentally included
   if (normalizedUrl.endsWith('/api/application')) {
     normalizedUrl = normalizedUrl.replace(/\/api\/application$/, '');
   } else if (normalizedUrl.endsWith('/api')) {
@@ -32,30 +139,39 @@ function getPterodactylConfig() {
   }
   
   console.log(`Pterodactyl API URL (normalized): ${normalizedUrl}`);
-  
   return { apiUrl: normalizedUrl, apiKey: PTERODACTYL_API_KEY };
 }
+
+// ============= Main Handler =============
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   try {
     const body = await req.json();
-    const { action, orderId, serverDetails, serverId, apiUrl: testApiUrl, apiKey: testApiKey } = body;
+    const action = validateAction(body.action);
+    const { orderId, serverDetails, serverId, apiUrl: testApiUrl, apiKey: testApiKey } = body;
 
     console.log(`Pterodactyl action: ${action}`);
 
     // For test action, use provided credentials (admin testing before saving)
+    // ADMIN ONLY: Test connection requires admin privileges
     if (action === "test") {
-      return await handleTestConnection(testApiUrl, testApiKey, corsHeaders);
+      await requireAdmin(req);
+      const validatedUrl = validateUrl(testApiUrl);
+      if (typeof testApiKey !== "string" || testApiKey.length === 0) {
+        throw new Error("API key is required for testing");
+      }
+      return await handleTestConnection(validatedUrl, testApiKey, corsHeaders);
     }
 
-    // For get-panel-data, use secure config
+    // ADMIN ONLY: Get panel data
     if (action === "get-panel-data") {
+      await requireAdmin(req);
       const config = getPterodactylConfig();
       return await handleGetPanelData(config.apiUrl, config.apiKey, corsHeaders);
     }
@@ -70,21 +186,24 @@ serve(async (req) => {
 
     switch (action) {
       case "create": {
+        // ADMIN ONLY: Create server
+        await requireAdmin(req);
+        const validatedOrderId = validateUUID(orderId, "orderId");
+        
         // Set status to provisioning immediately
         await supabase.from("orders").update({ 
           status: "provisioning",
           notes: "Server provisioning in progress..."
-        }).eq("id", orderId);
+        }).eq("id", validatedOrderId);
         
         // Use background task for server creation to avoid timeout
-        const createPromise = createServer(config.apiUrl, apiHeaders, orderId, serverDetails, supabase)
+        const createPromise = createServer(config.apiUrl, apiHeaders, validatedOrderId, serverDetails, supabase)
           .catch(err => {
             console.error("Background server creation failed:", err);
-            // Update order with error status
             supabase.from("orders").update({ 
               status: "failed",
               notes: `Server creation failed: ${err.message}`
-            }).eq("id", orderId);
+            }).eq("id", validatedOrderId);
           });
         
         // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
@@ -100,7 +219,6 @@ serve(async (req) => {
           });
         }
         
-        // Fallback for environments without EdgeRuntime
         const result = await createPromise;
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -108,48 +226,89 @@ serve(async (req) => {
       }
 
       case "power": {
-        // Handle power actions (start, stop, restart, kill)
-        const { signal } = body;
-        const result = await sendPowerSignal(config.apiUrl, config.apiKey, serverId, signal);
+        // USER: Power actions allowed for server owners
+        const validatedServerId = validateServerId(serverId);
+        const validatedSignal = validatePowerSignal(body.signal);
+        
+        // Find the order by server_id and verify ownership
+        const { data: order } = await supabase
+          .from("orders")
+          .select("id, user_id")
+          .eq("server_id", validatedServerId)
+          .single();
+        
+        if (order) {
+          await requireOrderOwner(req, order.id);
+        } else {
+          await requireAdmin(req); // If no order found, require admin
+        }
+        
+        const result = await sendPowerSignal(config.apiUrl, config.apiKey, validatedServerId, validatedSignal);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
       case "suspend": {
-        const result = await suspendServer(config.apiUrl, apiHeaders, serverId);
-        await supabase.from("orders").update({ status: "suspended" }).eq("server_id", serverId);
+        // ADMIN ONLY: Suspend server
+        await requireAdmin(req);
+        const validatedServerId = validateServerId(serverId);
+        const result = await suspendServer(config.apiUrl, apiHeaders, validatedServerId);
+        await supabase.from("orders").update({ status: "suspended" }).eq("server_id", validatedServerId);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
       case "unsuspend": {
-        const result = await unsuspendServer(config.apiUrl, apiHeaders, serverId);
-        await supabase.from("orders").update({ status: "active" }).eq("server_id", serverId);
+        // ADMIN ONLY: Unsuspend server
+        await requireAdmin(req);
+        const validatedServerId = validateServerId(serverId);
+        const result = await unsuspendServer(config.apiUrl, apiHeaders, validatedServerId);
+        await supabase.from("orders").update({ status: "active" }).eq("server_id", validatedServerId);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
       case "terminate": {
-        const result = await terminateServer(config.apiUrl, apiHeaders, serverId);
-        await supabase.from("orders").update({ status: "terminated", server_id: null }).eq("server_id", serverId);
+        // ADMIN ONLY: Terminate server
+        await requireAdmin(req);
+        const validatedServerId = validateServerId(serverId);
+        const result = await terminateServer(config.apiUrl, apiHeaders, validatedServerId);
+        await supabase.from("orders").update({ status: "terminated", server_id: null }).eq("server_id", validatedServerId);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
       case "status": {
-        const result = await getServerStatus(config.apiUrl, apiHeaders, serverId);
+        // USER: Status check allowed for server owners
+        const validatedServerId = validateServerId(serverId);
+        
+        const { data: order } = await supabase
+          .from("orders")
+          .select("id, user_id")
+          .eq("server_id", validatedServerId)
+          .single();
+        
+        if (order) {
+          await requireOrderOwner(req, order.id);
+        } else {
+          await requireAdmin(req);
+        }
+        
+        const result = await getServerStatus(config.apiUrl, apiHeaders, validatedServerId);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
       case "reset-password": {
-        const { email } = body;
-        const result = await resetUserPassword(config.apiUrl, apiHeaders, email, supabase);
+        // ADMIN ONLY: Reset panel password
+        await requireAdmin(req);
+        const validatedEmail = validateEmail(body.email);
+        const result = await resetUserPassword(config.apiUrl, apiHeaders, validatedEmail, supabase);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -160,10 +319,17 @@ serve(async (req) => {
     }
   } catch (error: any) {
     console.error("Pterodactyl API error:", error);
+    
+    // Return appropriate HTTP status based on error type
+    let status = 500;
+    if (error.message.includes("Unauthorized")) status = 401;
+    else if (error.message.includes("Forbidden")) status = 403;
+    else if (error.message.includes("Invalid") || error.message.includes("must be")) status = 400;
+    
     return new Response(
       JSON.stringify({ error: error.message }),
       {
-        status: 500,
+        status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );

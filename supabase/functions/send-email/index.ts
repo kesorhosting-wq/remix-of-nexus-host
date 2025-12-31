@@ -7,8 +7,82 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+// ============= Authorization Helpers =============
+
+interface AuthResult {
+  user: { id: string; email?: string };
+  isAdmin: boolean;
+}
+
+async function getAuthUser(req: Request): Promise<AuthResult | null> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) return null;
+
+  const token = authHeader.replace("Bearer ", "");
+  const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const { data: { user }, error } = await anonClient.auth.getUser(token);
+  
+  if (error || !user) return null;
+
+  const serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const { data: isAdmin } = await serviceClient.rpc("has_role", {
+    _user_id: user.id,
+    _role: "admin",
+  });
+
+  return { user: { id: user.id, email: user.email }, isAdmin: !!isAdmin };
+}
+
+async function requireAdmin(req: Request): Promise<AuthResult> {
+  const auth = await getAuthUser(req);
+  if (!auth) throw new Error("Unauthorized: No valid authentication token");
+  if (!auth.isAdmin) throw new Error("Forbidden: Admin access required");
+  console.log(`Admin access granted for user: ${auth.user.id}`);
+  return auth;
+}
+
+// ============= Input Validation =============
+
+const ALLOWED_ACTIONS = [
+  "test", "welcome", "password-reset", "payment-confirmation", 
+  "server-setup-complete", "renewal-reminder", "service-suspended",
+  "service-terminated", "service-reactivated", "panel-credentials",
+  "panel-password-reset", "server-suspended-overdue", "payment-reminder"
+] as const;
+
+function validateAction(action: unknown): typeof ALLOWED_ACTIONS[number] {
+  if (typeof action !== "string" || !ALLOWED_ACTIONS.includes(action as any)) {
+    throw new Error(`Invalid action. Must be one of: ${ALLOWED_ACTIONS.join(", ")}`);
+  }
+  return action as typeof ALLOWED_ACTIONS[number];
+}
+
+function validateEmail(value: unknown): string {
+  if (typeof value !== "string") throw new Error("Email must be a string");
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(value) || value.length > 255) {
+    throw new Error("Invalid email address");
+  }
+  return value;
+}
+
+function validateUUID(value: unknown, fieldName: string): string {
+  if (typeof value !== "string") throw new Error(`${fieldName} must be a string`);
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(value)) throw new Error(`${fieldName} must be a valid UUID`);
+  return value;
+}
+
+function sanitizeString(value: unknown, maxLength = 1000): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/<[^>]*>/g, "").trim().slice(0, maxLength);
+}
+
+// ============= SMTP Functions =============
 
 async function getSMTPSettings(supabase: any) {
   const { data, error } = await supabase
@@ -180,13 +254,18 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   try {
     const body = await req.json();
-    const { action, to, orderId, invoiceId, serverDetails, resetUrl, userName } = body;
+    const action = validateAction(body.action);
+    const { to, orderId, invoiceId, serverDetails, resetUrl, userName } = body;
 
     console.log(`Email action: ${action}`);
+
+    // ADMIN ONLY: All email sending actions require admin privileges
+    // This prevents unauthorized users from sending emails to arbitrary addresses
+    await requireAdmin(req);
 
     const settings = await getSMTPSettings(supabase);
     
@@ -200,8 +279,9 @@ serve(async (req) => {
 
     switch (action) {
       case "test": {
+        const validatedTo = to ? validateEmail(to) : settings.from_email;
         const html = generateTestEmail(settings.from_name);
-        await sendEmail(settings, to || settings.from_email, "Test Email", html, supabase, action);
+        await sendEmail(settings, validatedTo, "Test Email", html, supabase, action);
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -446,10 +526,16 @@ serve(async (req) => {
     }
   } catch (error: any) {
     console.error("Email error:", error);
+    
+    let status = 500;
+    if (error.message.includes("Unauthorized")) status = 401;
+    else if (error.message.includes("Forbidden")) status = 403;
+    else if (error.message.includes("Invalid") || error.message.includes("must be")) status = 400;
+    
     return new Response(
       JSON.stringify({ error: error.message }),
       {
-        status: 500,
+        status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );

@@ -20,6 +20,7 @@ interface IkhodeSettings {
   node_api_url: string;
   websocket_url: string;
   webhook_secret: string;
+  custom_webhook_url: string;
 }
 
 const IkhodePaymentConfig = () => {
@@ -32,10 +33,12 @@ const IkhodePaymentConfig = () => {
     node_api_url: "",
     websocket_url: "",
     webhook_secret: "",
+    custom_webhook_url: "",
   });
 
   // This webhook URL format is sent to Node.js API as callbackUrl
-  const webhookUrlExample = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ikhode-webhook/{invoice_id}`;
+  const defaultWebhookUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ikhode-webhook/{invoice_id}`;
+  const activeWebhookUrl = settings.custom_webhook_url || defaultWebhookUrl;
 
   useEffect(() => {
     fetchSettings();
@@ -54,6 +57,7 @@ const IkhodePaymentConfig = () => {
         node_api_url: config.node_api_url || "",
         websocket_url: config.websocket_url || "",
         webhook_secret: config.webhook_secret || "",
+        custom_webhook_url: config.custom_webhook_url || "",
       });
     }
   };
@@ -127,6 +131,7 @@ const IkhodePaymentConfig = () => {
         node_api_url: settings.node_api_url.replace(/\/$/, ""),
         websocket_url: settings.websocket_url,
         webhook_secret: settings.webhook_secret,
+        custom_webhook_url: settings.custom_webhook_url,
       };
 
       const { data: existing } = await supabase
@@ -166,7 +171,7 @@ const IkhodePaymentConfig = () => {
   };
 
   const copyWebhookUrl = () => {
-    navigator.clipboard.writeText(webhookUrlExample);
+    navigator.clipboard.writeText(activeWebhookUrl);
     toast({ title: "Webhook URL copied!" });
   };
 
@@ -266,15 +271,33 @@ const IkhodePaymentConfig = () => {
                 </p>
               </div>
 
-              {/* Webhook URL Info */}
+              {/* Custom Webhook URL */}
+              <div className="space-y-2">
+                <Label htmlFor="custom_webhook_url">Custom Webhook URL (Optional)</Label>
+                <div className="relative">
+                  <Link className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    id="custom_webhook_url"
+                    placeholder={defaultWebhookUrl}
+                    value={settings.custom_webhook_url}
+                    onChange={(e) => setSettings({ ...settings, custom_webhook_url: e.target.value })}
+                    className="pl-10 font-mono text-xs"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Leave empty to use default. Use <code className="bg-muted px-1 rounded">{"{invoice_id}"}</code> as placeholder for the invoice ID.
+                </p>
+              </div>
+
+              {/* Active Webhook URL Info */}
               <div className="p-4 bg-muted rounded-lg space-y-2">
                 <Label className="text-sm font-medium flex items-center gap-2">
                   <Link className="w-4 h-4" />
-                  Webhook URL (automatically sent to your API)
+                  Active Webhook URL (sent to your API)
                 </Label>
                 <div className="flex items-center gap-2">
                   <Input
-                    value={webhookUrlExample}
+                    value={activeWebhookUrl}
                     readOnly
                     className="font-mono text-xs bg-background"
                   />
@@ -283,7 +306,7 @@ const IkhodePaymentConfig = () => {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  This URL is sent as callbackUrl when generating KHQR
+                  {settings.custom_webhook_url ? "Using custom URL" : "Using default URL"} - sent as callbackUrl when generating KHQR
                 </p>
               </div>
 

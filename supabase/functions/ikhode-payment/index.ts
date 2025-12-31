@@ -72,16 +72,18 @@ serve(async (req) => {
       );
     }
 
-    // Config matches PHP extension: node_api_url, websocket_url, webhook_secret
+    // Config matches PHP extension: node_api_url, websocket_url, webhook_secret, custom_webhook_url
     const config = gateway.config as { 
       node_api_url: string; 
       websocket_url: string;
       webhook_secret: string;
+      custom_webhook_url?: string;
     };
     
     const apiUrl = config.node_api_url?.replace(/\/$/, "");
     const wsUrl = config.websocket_url;
     const webhookSecret = config.webhook_secret || "";
+    const customWebhookUrl = config.custom_webhook_url || "";
 
     if (!apiUrl) {
       return new Response(
@@ -149,9 +151,12 @@ serve(async (req) => {
           );
         }
 
-        // Build callback URL exactly like PHP: url('/extensions/khqr/webhook/' . $invoice->id)
-        // But we use our edge function: /functions/v1/ikhode-webhook/{invoiceId}
-        const callbackUrl = `${supabaseUrl}/functions/v1/ikhode-webhook/${invoiceId}`;
+        // Build callback URL - use custom URL if configured, otherwise default
+        // Default format: /functions/v1/ikhode-webhook/{invoiceId}
+        const defaultCallbackUrl = `${supabaseUrl}/functions/v1/ikhode-webhook/${invoiceId}`;
+        const callbackUrl = customWebhookUrl 
+          ? customWebhookUrl.replace("{invoice_id}", invoiceId)
+          : defaultCallbackUrl;
 
         // KHQR billNumber has max 25 characters - shorten the UUID
         // Format: INV-{first8chars}-{timestamp_last6}

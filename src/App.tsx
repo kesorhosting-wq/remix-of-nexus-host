@@ -24,6 +24,7 @@ import Products from "./pages/Products";
 import Checkout from "./pages/Checkout";
 import Cart from "./pages/Cart";
 import PaymentHistory from "./pages/PaymentHistory";
+import Panel from "./pages/Panel";
 import DynamicHead from "./components/DynamicHead";
 import { LanguageProvider } from "./contexts/LanguageContext";
 import { CartProvider } from "./contexts/CartContext";
@@ -47,6 +48,7 @@ const App = () => (
                 <Route path="/products" element={<Products />} />
                 <Route path="/checkout/:planId" element={<Checkout />} />
                 <Route path="/cart" element={<Cart />} />
+                <Route path="/panel" element={<Panel />} />
                 <Route path="/admin" element={<Admin />} />
                 <Route path="/admin/dashboard" element={<AdminDashboard />} />
                 <Route path="/auth" element={<ClientAuth />} />

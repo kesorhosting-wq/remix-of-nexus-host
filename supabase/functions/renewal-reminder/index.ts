@@ -6,21 +6,79 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+// ============= Authorization Helpers =============
+
+interface AuthResult {
+  user: { id: string; email?: string };
+  isAdmin: boolean;
+}
+
+async function getAuthUser(req: Request): Promise<AuthResult | null> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) return null;
+
+  const token = authHeader.replace("Bearer ", "");
+  const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const { data: { user }, error } = await anonClient.auth.getUser(token);
+  
+  if (error || !user) return null;
+
+  const serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const { data: isAdmin } = await serviceClient.rpc("has_role", {
+    _user_id: user.id,
+    _role: "admin",
+  });
+
+  return { user: { id: user.id, email: user.email }, isAdmin: !!isAdmin };
+}
+
+async function requireAdmin(req: Request): Promise<AuthResult> {
+  const auth = await getAuthUser(req);
+  if (!auth) throw new Error("Unauthorized: No valid authentication token");
+  if (!auth.isAdmin) throw new Error("Forbidden: Admin access required");
+  console.log(`Admin access granted for user: ${auth.user.id}`);
+  return auth;
+}
+
+// ============= Input Validation =============
+
+const ALLOWED_ACTIONS = ["check", "send-reminders", "get-pending", "auto-suspend", "daily-job", "renew"] as const;
+
+function validateAction(action: unknown): typeof ALLOWED_ACTIONS[number] {
+  if (typeof action !== "string" || !ALLOWED_ACTIONS.includes(action as any)) {
+    throw new Error(`Invalid action. Must be one of: ${ALLOWED_ACTIONS.join(", ")}`);
+  }
+  return action as typeof ALLOWED_ACTIONS[number];
+}
+
+function validateUUID(value: unknown, fieldName: string): string {
+  if (typeof value !== "string") throw new Error(`${fieldName} must be a string`);
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(value)) throw new Error(`${fieldName} must be a valid UUID`);
+  return value;
+}
+
+// ============= Main Handler =============
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   try {
     const body = await req.json().catch(() => ({}));
-    const { action = "check" } = body;
+    const action = validateAction(body.action || "check");
 
     console.log(`Renewal reminder action: ${action}`);
+
+    // ADMIN ONLY: All renewal reminder actions require admin privileges
+    await requireAdmin(req);
 
     switch (action) {
       case "check": {
@@ -52,7 +110,6 @@ serve(async (req) => {
       }
 
       case "daily-job": {
-        // Combined action for cron job: send reminders + auto-suspend
         const reminderResult = await sendPaymentReminders(supabase);
         const suspendResult = await autoSuspendOverdue(supabase);
         return new Response(JSON.stringify({
@@ -65,8 +122,9 @@ serve(async (req) => {
       }
 
       case "renew": {
-        const { orderId, paymentId } = body;
-        const result = await renewService(supabase, orderId, paymentId);
+        const validatedOrderId = validateUUID(body.orderId, "orderId");
+        const validatedPaymentId = body.paymentId ? validateUUID(body.paymentId, "paymentId") : "";
+        const result = await renewService(supabase, validatedOrderId, validatedPaymentId);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -77,10 +135,16 @@ serve(async (req) => {
     }
   } catch (error: any) {
     console.error("Renewal reminder error:", error);
+    
+    let status = 500;
+    if (error.message.includes("Unauthorized")) status = 401;
+    else if (error.message.includes("Forbidden")) status = 403;
+    else if (error.message.includes("Invalid") || error.message.includes("must be")) status = 400;
+    
     return new Response(
       JSON.stringify({ error: error.message }),
       {
-        status: 500,
+        status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );

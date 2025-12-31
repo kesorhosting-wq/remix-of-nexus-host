@@ -7,26 +7,127 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+
+// ============= Authorization Helpers =============
+
+interface AuthResult {
+  user: { id: string; email?: string };
+  isAdmin: boolean;
+}
+
+async function getAuthUser(req: Request): Promise<AuthResult | null> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) return null;
+
+  const token = authHeader.replace("Bearer ", "");
+  const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const { data: { user }, error } = await anonClient.auth.getUser(token);
+  
+  if (error || !user) return null;
+
+  const serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const { data: isAdmin } = await serviceClient.rpc("has_role", {
+    _user_id: user.id,
+    _role: "admin",
+  });
+
+  return { user: { id: user.id, email: user.email }, isAdmin: !!isAdmin };
+}
+
+async function requireAdmin(req: Request): Promise<AuthResult> {
+  const auth = await getAuthUser(req);
+  if (!auth) throw new Error("Unauthorized: No valid authentication token");
+  if (!auth.isAdmin) throw new Error("Forbidden: Admin access required");
+  console.log(`Admin access granted for user: ${auth.user.id}`);
+  return auth;
+}
+
+// ============= Input Validation =============
+
+const ALLOWED_ACTIONS = [
+  "create", "generate-renewal", "check-overdue", 
+  "generate-pdf", "send-payment-confirmation", "payment-confirmed"
+] as const;
+
+function validateAction(action: unknown): typeof ALLOWED_ACTIONS[number] {
+  if (typeof action !== "string" || !ALLOWED_ACTIONS.includes(action as any)) {
+    throw new Error(`Invalid action. Must be one of: ${ALLOWED_ACTIONS.join(", ")}`);
+  }
+  return action as typeof ALLOWED_ACTIONS[number];
+}
+
+function validateUUID(value: unknown, fieldName: string): string {
+  if (typeof value !== "string") throw new Error(`${fieldName} must be a string`);
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(value)) throw new Error(`${fieldName} must be a valid UUID`);
+  return value;
+}
+
+function validateItems(items: unknown): Array<{ description: string; quantity: number; unitPrice: number }> {
+  if (!Array.isArray(items)) throw new Error("items must be an array");
+  if (items.length > 50) throw new Error("items cannot exceed 50 entries");
+  
+  return items.map((item, index) => {
+    if (typeof item !== "object" || item === null) {
+      throw new Error(`items[${index}] must be an object`);
+    }
+    const { description, quantity, unitPrice } = item as any;
+    
+    if (typeof description !== "string" || description.length > 500) {
+      throw new Error(`items[${index}].description must be a string under 500 characters`);
+    }
+    if (typeof quantity !== "number" || quantity < 1 || quantity > 10000) {
+      throw new Error(`items[${index}].quantity must be a number between 1 and 10000`);
+    }
+    if (typeof unitPrice !== "number" || unitPrice < 0 || unitPrice > 1000000) {
+      throw new Error(`items[${index}].unitPrice must be a number between 0 and 1000000`);
+    }
+    
+    return {
+      description: description.replace(/<[^>]*>/g, "").trim(),
+      quantity,
+      unitPrice,
+    };
+  });
+}
+
+// ============= Main Handler =============
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   try {
     const body = await req.json();
-    const { action, orderId, userId, items, dueDate, notes, invoiceId } = body;
+    const action = validateAction(body.action);
+    const { orderId, userId, items, dueDate, notes, invoiceId } = body;
 
     console.log(`Invoice generator action: ${action}`);
 
+    // ADMIN ONLY: All invoice operations require admin privileges
+    await requireAdmin(req);
+
     switch (action) {
       case "create": {
-        const result = await createInvoice(supabase, { orderId, userId, items, dueDate, notes });
+        const validatedOrderId = orderId ? validateUUID(orderId, "orderId") : undefined;
+        const validatedUserId = validateUUID(userId, "userId");
+        const validatedItems = items ? validateItems(items) : undefined;
+        const sanitizedNotes = typeof notes === "string" ? notes.replace(/<[^>]*>/g, "").slice(0, 1000) : undefined;
+        
+        const result = await createInvoice(supabase, { 
+          orderId: validatedOrderId, 
+          userId: validatedUserId, 
+          items: validatedItems, 
+          dueDate, 
+          notes: sanitizedNotes 
+        });
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -47,22 +148,24 @@ serve(async (req) => {
       }
 
       case "generate-pdf": {
-        const result = await generateInvoicePDF(supabase, invoiceId);
+        const validatedInvoiceId = validateUUID(invoiceId, "invoiceId");
+        const result = await generateInvoicePDF(supabase, validatedInvoiceId);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
       case "send-payment-confirmation": {
-        const result = await sendPaymentConfirmationEmail(supabase, invoiceId);
+        const validatedInvoiceId = validateUUID(invoiceId, "invoiceId");
+        const result = await sendPaymentConfirmationEmail(supabase, validatedInvoiceId);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
       case "payment-confirmed": {
-        // Called when payment is confirmed - generates PDF and sends email
-        const result = await handlePaymentConfirmed(supabase, invoiceId);
+        const validatedInvoiceId = validateUUID(invoiceId, "invoiceId");
+        const result = await handlePaymentConfirmed(supabase, validatedInvoiceId);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -73,10 +176,16 @@ serve(async (req) => {
     }
   } catch (error: any) {
     console.error("Invoice generator error:", error);
+    
+    let status = 500;
+    if (error.message.includes("Unauthorized")) status = 401;
+    else if (error.message.includes("Forbidden")) status = 403;
+    else if (error.message.includes("Invalid") || error.message.includes("must be")) status = 400;
+    
     return new Response(
       JSON.stringify({ error: error.message }),
       {
-        status: 500,
+        status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );

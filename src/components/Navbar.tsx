@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Menu, X, User, ShoppingCart } from "lucide-react";
+import { Menu, X, User, ShoppingCart, ExternalLink } from "lucide-react";
 import { useGameStore } from "@/store/gameStore";
 import { ThemeToggle } from "./ThemeToggle";
 import LanguageSwitcher from "./LanguageSwitcher";
@@ -95,13 +95,16 @@ const Navbar = () => {
                 )
               ))}
               {/* Panel Link - Desktop */}
-              <Link
-                to="/panel"
+              <a
+                href="https://panel.kesor.cam/"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="font-medium text-muted-foreground hover:text-primary transition-colors duration-300 relative group flex items-center gap-1"
               >
                 Panel
+                <ExternalLink className="w-3 h-3" />
                 <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-primary transition-all duration-300 group-hover:w-full" />
-              </Link>
+              </a>
             </div>
 
             {/* CTA Buttons */}
@@ -194,13 +197,16 @@ const Navbar = () => {
                 ))}
                 
                 {/* Panel Link - Mobile */}
-                <Link
-                  to="/panel"
-                  className="font-medium text-muted-foreground hover:text-primary transition-colors py-2"
+                <a
+                  href="https://panel.kesor.cam/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-muted-foreground hover:text-primary transition-colors py-2 flex items-center gap-2"
                   onClick={() => setIsOpen(false)}
                 >
                   Panel
-                </Link>
+                  <ExternalLink className="w-4 h-4" />
+                </a>
 
                 {/* Mobile Auth/Dashboard Button */}
                 <div className="pt-2 border-t border-border">

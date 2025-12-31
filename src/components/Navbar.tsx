@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Menu, X, Zap, User, ShoppingCart } from "lucide-react";
+import { Menu, X, User, ShoppingCart, ExternalLink } from "lucide-react";
 import { useGameStore } from "@/store/gameStore";
 import { ThemeToggle } from "./ThemeToggle";
 import LanguageSwitcher from "./LanguageSwitcher";
@@ -44,10 +44,8 @@ const Navbar = () => {
     const sectionId = href.replace('#', '');
     
     if (location.pathname !== '/') {
-      // Navigate to home page with the hash
       navigate('/' + href);
     } else {
-      // Already on home page, just scroll
       const element = document.getElementById(sectionId);
       if (element) {
         element.scrollIntoView({ behavior: 'smooth' });
@@ -96,6 +94,17 @@ const Navbar = () => {
                   </a>
                 )
               ))}
+              {/* Panel Link - Desktop */}
+              <a
+                href="https://panel.kesor.cam/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-muted-foreground hover:text-primary transition-colors duration-300 relative group flex items-center gap-1"
+              >
+                Panel
+                <ExternalLink className="w-3 h-3" />
+                <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-primary transition-all duration-300 group-hover:w-full" />
+              </a>
             </div>
 
             {/* CTA Buttons */}
@@ -136,6 +145,17 @@ const Navbar = () => {
 
             {/* Mobile Menu Button */}
             <div className="md:hidden flex items-center gap-2">
+              {/* Mobile Cart Button */}
+              <Link to="/cart" className="relative">
+                <Button variant="ghost" size="icon" className="h-9 w-9">
+                  <ShoppingCart className="w-5 h-5" />
+                  {itemCount > 0 && (
+                    <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-primary-foreground text-xs rounded-full flex items-center justify-center">
+                      {itemCount}
+                    </span>
+                  )}
+                </Button>
+              </Link>
               <LanguageSwitcher />
               <ThemeToggle />
               <button
@@ -175,7 +195,40 @@ const Navbar = () => {
                     </a>
                   )
                 ))}
-                <div className="pt-4">
+                
+                {/* Panel Link - Mobile */}
+                <a
+                  href="https://panel.kesor.cam/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-muted-foreground hover:text-primary transition-colors py-2 flex items-center gap-2"
+                  onClick={() => setIsOpen(false)}
+                >
+                  Panel
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+
+                {/* Mobile Auth/Dashboard Button */}
+                <div className="pt-2 border-t border-border">
+                  {user ? (
+                    <Link to="/client" onClick={() => setIsOpen(false)}>
+                      <Button variant="outline" size="sm" className="w-full gap-2">
+                        <User className="w-4 h-4" />
+                        {t('billing.dashboard')}
+                      </Button>
+                    </Link>
+                  ) : (
+                    <Link to="/auth" onClick={() => setIsOpen(false)}>
+                      <Button variant="outline" size="sm" className="w-full gap-2">
+                        <User className="w-4 h-4" />
+                        {t('billing.login')}
+                      </Button>
+                    </Link>
+                  )}
+                </div>
+
+                {/* Mobile Checkout/CTA Button */}
+                <div className="pt-2">
                   <a href={brand.ctaLink}>
                     <Button variant="default" size="sm" className="w-full">
                       {brand.ctaText}

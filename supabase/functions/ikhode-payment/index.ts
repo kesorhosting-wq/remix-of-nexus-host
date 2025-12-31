@@ -6,6 +6,28 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Helper function to verify authentication
+async function getAuthenticatedUser(req: Request, supabase: any): Promise<{ userId: string; email: string } | null> {
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+  
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) {
+      console.log("[Ikhode] Auth error:", error?.message);
+      return null;
+    }
+    return { userId: user.id, email: user.email || "" };
+  } catch (error) {
+    console.error("[Ikhode] Auth verification failed:", error);
+    return null;
+  }
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -15,6 +37,10 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    
+    // Use anon key for auth verification, service role for database operations
+    const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey);
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Get Ikhode API config from payment_gateways (matching PHP extension config names)
@@ -71,8 +97,57 @@ serve(async (req) => {
 
     switch (action) {
       case "generate-khqr": {
+        // SECURITY: Require authentication for payment generation
+        const authUser = await getAuthenticatedUser(req, supabaseAuth);
+        if (!authUser) {
+          console.log("[Ikhode] Unauthorized attempt to generate KHQR");
+          return new Response(
+            JSON.stringify({ error: "Authentication required to generate payment" }),
+            { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
         // Matches PHP extension pay() method
         const { amount, invoiceId, email, username } = params;
+
+        // SECURITY: Verify the invoice belongs to the authenticated user
+        const { data: invoice, error: invoiceError } = await supabase
+          .from("invoices")
+          .select("id, user_id, total, status")
+          .eq("id", invoiceId)
+          .maybeSingle();
+
+        if (invoiceError || !invoice) {
+          console.log("[Ikhode] Invoice not found:", invoiceId);
+          return new Response(
+            JSON.stringify({ error: "Invoice not found" }),
+            { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        if (invoice.user_id !== authUser.userId) {
+          console.log("[Ikhode] User attempting to pay for another user's invoice");
+          return new Response(
+            JSON.stringify({ error: "You can only pay for your own invoices" }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        if (invoice.status === "paid") {
+          return new Response(
+            JSON.stringify({ error: "This invoice has already been paid" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        // SECURITY: Validate amount matches invoice total
+        if (Number(amount) !== Number(invoice.total)) {
+          console.log(`[Ikhode] Amount mismatch: requested ${amount}, invoice total ${invoice.total}`);
+          return new Response(
+            JSON.stringify({ error: "Payment amount does not match invoice total" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
 
         // Build callback URL exactly like PHP: url('/extensions/khqr/webhook/' . $invoice->id)
         // But we use our edge function: /functions/v1/ikhode-webhook/{invoiceId}
@@ -82,14 +157,11 @@ serve(async (req) => {
         // Format: INV-{first8chars}-{timestamp_last6}
         const shortTransactionId = `INV-${invoiceId.slice(0, 8)}-${Date.now().toString().slice(-6)}`;
 
-        console.log(`[Ikhode] Generating KHQR (matching PHP extension):`);
+        console.log(`[Ikhode] Generating KHQR for authenticated user ${authUser.userId}:`);
         console.log(`  - Amount: ${amount}`);
         console.log(`  - Invoice ID: ${invoiceId}`);
         console.log(`  - Short Transaction ID: ${shortTransactionId}`);
-        console.log(`  - Email: ${email}`);
-        console.log(`  - Username: ${username}`);
         console.log(`  - Callback URL: ${callbackUrl}`);
-        console.log(`  - API Endpoint: ${apiUrl}/generate-khqr`);
 
         // Call Node.js API exactly like PHP extension does
         // PHP: Http::post("{$apiUrl}/generate-khqr", [...])
@@ -99,7 +171,7 @@ serve(async (req) => {
           body: JSON.stringify({
             amount: Number(amount),
             transactionId: shortTransactionId, // Shortened to fit KHQR billNumber limit (25 chars)
-            email: email || "",
+            email: email || authUser.email,
             username: username || "",
             callbackUrl,
             secret: webhookSecret,
@@ -132,7 +204,7 @@ serve(async (req) => {
           );
         }
 
-        console.log(`[Ikhode] KHQR generated successfully`);
+        console.log(`[Ikhode] KHQR generated successfully for user ${authUser.userId}`);
 
         // Return data for the view (matches PHP returning view with qrCodeData, wsUrl)
         return new Response(JSON.stringify({
@@ -146,14 +218,37 @@ serve(async (req) => {
       }
 
       case "check-status": {
+        // SECURITY: Require authentication for status check
+        const authUser = await getAuthenticatedUser(req, supabaseAuth);
+        if (!authUser) {
+          return new Response(
+            JSON.stringify({ error: "Authentication required" }),
+            { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
         const { invoiceId } = params;
         
-        // Check invoice status in our database
+        // Check invoice status - only allow users to check their own invoices
         const { data: invoice } = await supabase
           .from("invoices")
-          .select("status")
+          .select("status, user_id")
           .eq("id", invoiceId)
           .maybeSingle();
+
+        if (!invoice) {
+          return new Response(
+            JSON.stringify({ error: "Invoice not found" }),
+            { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        if (invoice.user_id !== authUser.userId) {
+          return new Response(
+            JSON.stringify({ error: "You can only check your own invoices" }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
 
         return new Response(
           JSON.stringify({ 
@@ -165,6 +260,8 @@ serve(async (req) => {
       }
 
       case "get-config": {
+        // This is a public endpoint - no auth required
+        // Only returns non-sensitive config info
         console.log(`[Ikhode] Config - API: ${apiUrl}, WS: ${wsUrl}`);
 
         return new Response(

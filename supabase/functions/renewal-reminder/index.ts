@@ -345,35 +345,64 @@ async function getPendingReminders(supabase: any) {
 }
 
 async function autoSuspendOverdue(supabase: any) {
-  console.log("Checking for overdue orders to suspend...");
+  console.log("Checking for orders to suspend (overdue OR exceeded age limit)...");
 
   const now = new Date();
+  
+  // Configuration: Max server age in days (like your Node.js DAYS_LIMIT_SUSPEND = 30)
+  const MAX_SERVER_AGE_DAYS = 30;
+  const maxAgeDate = new Date(now.getTime() - MAX_SERVER_AGE_DAYS * 24 * 60 * 60 * 1000);
 
-  // Get active orders that are past due date
-  const { data: overdueOrders, error } = await supabase
+  // Get all active orders
+  const { data: activeOrders, error } = await supabase
     .from("orders")
     .select("*, products(name)")
-    .eq("status", "active")
-    .lt("next_due_date", now.toISOString());
+    .eq("status", "active");
 
   if (error) {
-    console.error("Error fetching overdue orders:", error);
-    throw new Error("Failed to fetch overdue orders");
+    console.error("Error fetching active orders:", error);
+    throw new Error("Failed to fetch active orders");
   }
 
   const suspended: string[] = [];
   const emailsSent: string[] = [];
+  const suspensionReasons: Record<string, string> = {};
 
-  for (const order of overdueOrders || []) {
-    console.log(`Processing overdue order ${order.id}`);
+  // Get Pterodactyl config once (for efficiency)
+  const { data: integration } = await supabase
+    .from("server_integrations")
+    .select("*")
+    .eq("type", "pterodactyl")
+    .eq("enabled", true)
+    .maybeSingle();
 
-    // Get Pterodactyl config
-    const { data: integration } = await supabase
-      .from("server_integrations")
-      .select("*")
-      .eq("type", "pterodactyl")
-      .eq("enabled", true)
-      .maybeSingle();
+  for (const order of activeOrders || []) {
+    const createdAt = new Date(order.created_at);
+    const nextDueDate = order.next_due_date ? new Date(order.next_due_date) : null;
+    
+    // Check both conditions:
+    // 1. Billing overdue: next_due_date has passed
+    // 2. Age limit exceeded: created_at is older than MAX_SERVER_AGE_DAYS
+    const isOverdue = nextDueDate && nextDueDate < now;
+    const isAgeExceeded = createdAt < maxAgeDate;
+    
+    // Skip if neither condition is met
+    if (!isOverdue && !isAgeExceeded) {
+      continue;
+    }
+
+    // Determine suspension reason
+    let reason = "";
+    if (isOverdue && isAgeExceeded) {
+      reason = "overdue_and_age_exceeded";
+    } else if (isOverdue) {
+      reason = "billing_overdue";
+    } else {
+      reason = "age_limit_exceeded";
+    }
+
+    console.log(`Processing order ${order.id} for suspension. Reason: ${reason}`);
+    suspensionReasons[order.id] = reason;
 
     // Suspend server in Pterodactyl if configured
     if (integration && order.server_id) {
@@ -439,9 +468,10 @@ async function autoSuspendOverdue(supabase: any) {
             to: profile.email,
             serverName,
             orderId: order.id,
-            dueDate: order.next_due_date,
+            dueDate: order.next_due_date || order.created_at,
             amount: order.price || 0,
             paymentUrl,
+            suspensionReason: reason,
           },
         });
 
@@ -453,12 +483,22 @@ async function autoSuspendOverdue(supabase: any) {
     }
   }
 
+  // Count by reason
+  const overdueCount = Object.values(suspensionReasons).filter(r => r.includes("overdue")).length;
+  const ageExceededCount = Object.values(suspensionReasons).filter(r => r.includes("age")).length;
+
   return {
     success: true,
     checkedAt: now.toISOString(),
-    overdueCount: overdueOrders?.length || 0,
+    maxServerAgeDays: MAX_SERVER_AGE_DAYS,
+    totalActiveChecked: activeOrders?.length || 0,
     suspendedCount: suspended.length,
     suspendedOrders: suspended,
+    suspensionReasons,
+    breakdown: {
+      billingOverdue: overdueCount,
+      ageExceeded: ageExceededCount,
+    },
     emailsSentCount: emailsSent.length,
     emailsSent,
   };

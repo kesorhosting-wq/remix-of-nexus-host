@@ -71,7 +71,7 @@ async function requireOrderOwner(req: Request, orderId: string): Promise<AuthRes
 
 // ============= Input Validation =============
 
-const ALLOWED_ACTIONS = ["test", "get-panel-data", "create", "power", "suspend", "unsuspend", "terminate", "status", "reset-password"] as const;
+const ALLOWED_ACTIONS = ["test", "get-panel-data", "create", "power", "suspend", "unsuspend", "terminate", "status", "reset-password", "sync-servers"] as const;
 const ALLOWED_POWER_SIGNALS = ["start", "stop", "restart", "kill"] as const;
 
 function validateAction(action: unknown): typeof ALLOWED_ACTIONS[number] {
@@ -309,6 +309,15 @@ serve(async (req) => {
         await requireAdmin(req);
         const validatedEmail = validateEmail(body.email);
         const result = await resetUserPassword(config.apiUrl, apiHeaders, validatedEmail, supabase);
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "sync-servers": {
+        // ADMIN ONLY: Sync all servers from Pterodactyl panel to orders
+        await requireAdmin(req);
+        const result = await syncServersFromPanel(config.apiUrl, apiHeaders, supabase);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -1082,6 +1091,158 @@ async function resetUserPassword(apiUrl: string, headers: Record<string, string>
       email: email,
       username: username,
       password: newPassword,
+    },
+  };
+}
+
+// ============= Sync Servers From Panel =============
+
+async function syncServersFromPanel(
+  apiUrl: string,
+  headers: Record<string, string>,
+  supabase: any
+) {
+  console.log("Syncing servers from Pterodactyl panel...");
+
+  // Fetch all servers from panel with pagination
+  let allServers: any[] = [];
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const serversRes = await fetch(
+      `${apiUrl}/api/application/servers?page=${page}&include=user`,
+      { headers }
+    );
+
+    if (!serversRes.ok) {
+      throw new Error("Failed to fetch servers from panel");
+    }
+
+    const serversData = await serversRes.json();
+    allServers = allServers.concat(serversData.data || []);
+    
+    // Check if there are more pages
+    const meta = serversData.meta?.pagination;
+    if (meta && meta.current_page < meta.total_pages) {
+      page++;
+    } else {
+      hasMore = false;
+    }
+  }
+
+  console.log(`Found ${allServers.length} servers in panel`);
+
+  // Get existing orders with server_ids
+  const { data: existingOrders } = await supabase
+    .from("orders")
+    .select("server_id, user_id");
+
+  const existingServerIds = new Set(
+    (existingOrders || []).map((o: any) => o.server_id).filter(Boolean)
+  );
+
+  const imported: any[] = [];
+  const skipped: any[] = [];
+  const errors: any[] = [];
+
+  for (const server of allServers) {
+    const attrs = server.attributes;
+    const externalId = attrs.external_id || attrs.uuid;
+    const serverName = attrs.name;
+    const createdAt = attrs.created_at;
+    const suspended = attrs.suspended;
+    const userAttrs = attrs.relationships?.user?.attributes;
+
+    // Skip if already exists
+    if (existingServerIds.has(externalId) || existingServerIds.has(attrs.uuid)) {
+      skipped.push({ id: attrs.id, name: serverName, reason: "already_exists" });
+      continue;
+    }
+
+    try {
+      // Find or create user profile by email
+      let userId = null;
+      
+      if (userAttrs?.email) {
+        // First check if profile exists with this email
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("user_id")
+          .eq("email", userAttrs.email)
+          .maybeSingle();
+
+        if (profile) {
+          userId = profile.user_id;
+        } else {
+          // Check auth.users
+          const { data: authUsers } = await supabase.auth.admin.listUsers();
+          const existingAuthUser = authUsers?.users?.find(
+            (u: any) => u.email === userAttrs.email
+          );
+          
+          if (existingAuthUser) {
+            userId = existingAuthUser.id;
+          }
+        }
+      }
+
+      if (!userId) {
+        skipped.push({ id: attrs.id, name: serverName, reason: "no_matching_user", email: userAttrs?.email });
+        continue;
+      }
+
+      // Create order for this server
+      const serverDetails = {
+        plan_name: serverName,
+        panel_server_id: attrs.id,
+        synced_from_panel: true,
+        sync_date: new Date().toISOString(),
+        limits: attrs.limits,
+        feature_limits: attrs.feature_limits,
+      };
+
+      // Calculate next_due_date: 30 days from server creation
+      const created = new Date(createdAt);
+      const nextDueDate = new Date(created.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+      const { error: insertError } = await supabase.from("orders").insert({
+        user_id: userId,
+        server_id: externalId || attrs.uuid,
+        status: suspended ? "suspended" : "active",
+        price: 0, // Unknown from panel, admin can update
+        billing_cycle: "monthly",
+        server_details: serverDetails,
+        next_due_date: nextDueDate.toISOString(),
+        created_at: createdAt,
+        notes: `Imported from Pterodactyl panel on ${new Date().toISOString()}`,
+      });
+
+      if (insertError) {
+        errors.push({ id: attrs.id, name: serverName, error: insertError.message });
+      } else {
+        imported.push({ 
+          id: attrs.id, 
+          name: serverName, 
+          userId,
+          status: suspended ? "suspended" : "active"
+        });
+      }
+    } catch (err: any) {
+      errors.push({ id: attrs.id, name: serverName, error: err.message });
+    }
+  }
+
+  return {
+    success: true,
+    totalInPanel: allServers.length,
+    imported: imported.length,
+    skipped: skipped.length,
+    errors: errors.length,
+    details: {
+      imported,
+      skipped,
+      errors,
     },
   };
 }

@@ -51,7 +51,8 @@ const ALLOWED_ACTIONS = [
   "test", "welcome", "password-reset", "payment-confirmation", 
   "server-setup-complete", "renewal-reminder", "service-suspended",
   "service-terminated", "service-reactivated", "panel-credentials",
-  "panel-password-reset", "server-suspended-overdue", "payment-reminder"
+  "panel-password-reset", "server-suspended-overdue", "payment-reminder",
+  "server-age-warning"
 ] as const;
 
 function validateAction(action: unknown): typeof ALLOWED_ACTIONS[number] {
@@ -515,6 +516,19 @@ serve(async (req) => {
         const subject = `${subjectPrefix} Payment Due ${daysUntilDue === 1 ? "Tomorrow" : `in ${daysUntilDue} Days`} - Invoice #${invoiceNumber}`;
         
         await sendEmail(settings, to, subject, html, supabase, action, { invoiceNumber, daysUntilDue, amount });
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "server-age-warning": {
+        const { serverName, orderId, createdAt, daysOld, daysUntilSuspension, paymentUrl } = body;
+        
+        if (!to) throw new Error("Recipient email not provided");
+        
+        const html = generateServerAgeWarningEmail(to, serverName, createdAt, daysOld, daysUntilSuspension, paymentUrl, settings.from_name);
+        await sendEmail(settings, to, `⚠️ Warning: Your server ${serverName} will be suspended in ${daysUntilSuspension} days`, html, supabase, action, { orderId, daysOld, daysUntilSuspension });
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1367,6 +1381,94 @@ function generatePaymentReminderEmail(
         </div>
         <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
           ${brandName} • Automated Billing Reminder
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+// ============= 25-Day Server Age Warning Email =============
+
+function generateServerAgeWarningEmail(
+  email: string,
+  serverName: string,
+  createdAt: string,
+  daysOld: number,
+  daysUntilSuspension: number,
+  paymentUrl: string,
+  brandName: string
+): string {
+  const userName = email.split("@")[0];
+  const createdDate = new Date(createdAt).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 80px; height: 80px; background: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 40px;">⚠️</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px;">Server Warning</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Action Required</p>
+        </div>
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            Hello <strong>${userName}</strong>,
+          </p>
+          
+          <div style="background: #fffbeb; border: 1px solid #f59e0b; border-radius: 12px; padding: 20px; margin: 24px 0;">
+            <p style="margin: 0; color: #92400e; font-size: 16px;">
+              <strong>⚠️ Your server "${serverName}" will be suspended in ${daysUntilSuspension} days!</strong>
+            </p>
+          </div>
+          
+          <div style="background: #fafafa; border-radius: 12px; padding: 24px; margin: 24px 0;">
+            <h3 style="margin: 0 0 16px 0; color: #374151;">📄 Server Details</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 12px 0; color: #6b7280; border-bottom: 1px solid #e5e7eb;">Server Name</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #111827; border-bottom: 1px solid #e5e7eb;">${serverName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: #6b7280; border-bottom: 1px solid #e5e7eb;">Created On</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #111827; border-bottom: 1px solid #e5e7eb;">${createdDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: #6b7280; border-bottom: 1px solid #e5e7eb;">Server Age</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #f59e0b; border-bottom: 1px solid #e5e7eb;">${daysOld} days</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 0; color: #6b7280;">Days Until Suspension</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: 700; color: #dc2626; font-size: 20px;">${daysUntilSuspension} days</td>
+              </tr>
+            </table>
+          </div>
+          
+          <p style="color: #374151; font-size: 16px; line-height: 1.6;">
+            To keep your server running, please contact our admin team or complete your payment before the suspension date.
+          </p>
+          
+          <a href="${paymentUrl}" style="display: block; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; text-decoration: none; padding: 18px 32px; border-radius: 8px; font-weight: 600; text-align: center; margin-top: 24px; font-size: 16px;">
+            📞 Contact Admin Now
+          </a>
+          
+          <p style="text-align: center; color: #6b7280; font-size: 13px; margin-top: 20px;">
+            Questions? <a href="${paymentUrl.replace('/client', '/contact')}" style="color: #f59e0b;">Contact our support team</a>
+          </p>
+        </div>
+        <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
+          ${brandName} • Server Age Warning
         </p>
       </div>
     </body>

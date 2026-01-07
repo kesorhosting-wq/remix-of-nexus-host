@@ -349,6 +349,10 @@ async function autoSuspendOverdue(supabase: any) {
 
   const now = new Date();
   
+  // First, send 25-day warning emails (like DAYS_LIMIT_WARNING in Node.js code)
+  const warningResult = await sendAgeWarningEmails(supabase, now);
+  console.log("25-day warning emails result:", warningResult);
+  
   // Configuration: Max server age in days (like your Node.js DAYS_LIMIT_SUSPEND = 30)
   const MAX_SERVER_AGE_DAYS = 30;
   const maxAgeDate = new Date(now.getTime() - MAX_SERVER_AGE_DAYS * 24 * 60 * 60 * 1000);
@@ -594,5 +598,86 @@ async function renewService(supabase: any, orderId: string, paymentId: string) {
     orderId,
     newDueDate: newDueDate.toISOString(),
     billingDays,
+  };
+}
+
+// ============= 25-Day Warning Emails (like DAYS_LIMIT_WARNING in Node.js) =============
+
+async function sendAgeWarningEmails(supabase: any, now: Date) {
+  console.log("Checking for 25-day warning emails...");
+
+  // Configuration: Warning at 25 days (like DAYS_LIMIT_WARNING = 25 in Node.js code)
+  const DAYS_LIMIT_WARNING = 25;
+  const MAX_SERVER_AGE_DAYS = 30;
+  
+  // Calculate date range: servers created exactly 25 days ago (within 1 day window)
+  const warningDateStart = new Date(now.getTime() - (DAYS_LIMIT_WARNING + 1) * 24 * 60 * 60 * 1000);
+  const warningDateEnd = new Date(now.getTime() - (DAYS_LIMIT_WARNING - 1) * 24 * 60 * 60 * 1000);
+
+  // Get active orders created around 25 days ago that haven't been paid recently
+  const { data: ordersNearingLimit, error } = await supabase
+    .from("orders")
+    .select("*, products(name)")
+    .eq("status", "active")
+    .gte("created_at", warningDateStart.toISOString())
+    .lte("created_at", warningDateEnd.toISOString());
+
+  if (error) {
+    console.error("Error fetching orders for warning:", error);
+    return { error: error.message, emailsSent: 0 };
+  }
+
+  const emailsSent: string[] = [];
+  const errors: any[] = [];
+
+  for (const order of ordersNearingLimit || []) {
+    const createdAt = new Date(order.created_at);
+    const daysOld = Math.floor((now.getTime() - createdAt.getTime()) / (24 * 60 * 60 * 1000));
+    const daysUntilSuspension = MAX_SERVER_AGE_DAYS - daysOld;
+
+    // Get user email
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("email")
+      .eq("user_id", order.user_id)
+      .single();
+
+    if (!profile?.email) {
+      console.log(`No email found for user ${order.user_id}`);
+      continue;
+    }
+
+    try {
+      const serverName = order.server_details?.plan_name || order.products?.name || "Game Server";
+      const paymentUrl = `${Deno.env.get("SITE_URL") || "https://your-site.com"}/client`;
+
+      await supabase.functions.invoke("send-email", {
+        body: {
+          action: "server-age-warning",
+          to: profile.email,
+          serverName,
+          orderId: order.id,
+          createdAt: order.created_at,
+          daysOld,
+          daysUntilSuspension,
+          paymentUrl,
+        },
+      });
+
+      emailsSent.push(profile.email);
+      console.log(`25-day warning email sent to ${profile.email} for order ${order.id} (${daysOld} days old)`);
+    } catch (emailError: any) {
+      console.error(`Failed to send warning email for order ${order.id}:`, emailError);
+      errors.push({ orderId: order.id, error: emailError.message });
+    }
+  }
+
+  return {
+    success: true,
+    warningDays: DAYS_LIMIT_WARNING,
+    ordersChecked: ordersNearingLimit?.length || 0,
+    emailsSentCount: emailsSent.length,
+    emailsSent,
+    errors,
   };
 }

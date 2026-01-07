@@ -147,6 +147,8 @@ const AdminDashboard = () => {
   const [runningDailyJob, setRunningDailyJob] = useState(false);
   const [dailyJobResult, setDailyJobResult] = useState<any>(null);
   const [unsuspendingOrder, setUnsuspendingOrder] = useState<string | null>(null);
+  const [syncingServers, setSyncingServers] = useState(false);
+  const [syncResult, setSyncResult] = useState<any>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -235,6 +237,33 @@ const AdminDashboard = () => {
       toast({ title: "Daily job failed", description: error.message, variant: "destructive" });
     } finally {
       setRunningDailyJob(false);
+    }
+  };
+
+  const handleSyncServers = async () => {
+    setSyncingServers(true);
+    setSyncResult(null);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke("pterodactyl", {
+        body: { action: "sync-servers" }
+      });
+      
+      if (error) throw error;
+      
+      setSyncResult(data);
+      toast({ 
+        title: "Server sync completed!",
+        description: `${data.imported || 0} imported, ${data.skipped || 0} skipped, ${data.errors || 0} errors`
+      });
+      
+      // Refresh data to show imported orders
+      fetchData();
+    } catch (error: any) {
+      console.error("Sync servers error:", error);
+      toast({ title: "Sync failed", description: error.message, variant: "destructive" });
+    } finally {
+      setSyncingServers(false);
     }
   };
 
@@ -948,6 +977,20 @@ const AdminDashboard = () => {
                         </AlertDialog>
                       </>
                     )}
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={handleSyncServers}
+                      disabled={syncingServers}
+                      className="gap-1"
+                    >
+                      {syncingServers ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Server className="w-4 h-4" />
+                      )}
+                      Sync Panel
+                    </Button>
                     <Button variant="outline" size="sm" onClick={fetchData}>
                       <RefreshCw className="w-4 h-4" />
                     </Button>

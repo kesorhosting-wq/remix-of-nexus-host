@@ -1142,94 +1142,202 @@ async function syncServersFromPanel(
     (existingOrders || []).map((o: any) => o.server_id).filter(Boolean)
   );
 
+  // Group servers by user email for batch processing
+  const serversByEmail: Map<string, any[]> = new Map();
+  
+  for (const server of allServers) {
+    const attrs = server.attributes;
+    const userAttrs = attrs.relationships?.user?.attributes;
+    const email = userAttrs?.email;
+    
+    if (email) {
+      if (!serversByEmail.has(email)) {
+        serversByEmail.set(email, []);
+      }
+      serversByEmail.get(email)!.push(server);
+    }
+  }
+
   const imported: any[] = [];
   const skipped: any[] = [];
   const errors: any[] = [];
+  const newUsersCreated: any[] = [];
 
-  for (const server of allServers) {
-    const attrs = server.attributes;
-    const externalId = attrs.external_id || attrs.uuid;
-    const serverName = attrs.name;
-    const createdAt = attrs.created_at;
-    const suspended = attrs.suspended;
-    const userAttrs = attrs.relationships?.user?.attributes;
+  for (const [email, servers] of serversByEmail) {
+    // Find or create user
+    let userId = null;
+    let isNewUser = false;
+    let generatedPassword = null;
+    
+    // First check if profile exists with this email
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("user_id")
+      .eq("email", email)
+      .maybeSingle();
 
-    // Skip if already exists
-    if (existingServerIds.has(externalId) || existingServerIds.has(attrs.uuid)) {
-      skipped.push({ id: attrs.id, name: serverName, reason: "already_exists" });
-      continue;
+    if (profile) {
+      userId = profile.user_id;
+    } else {
+      // Check auth.users
+      const { data: authUsers } = await supabase.auth.admin.listUsers();
+      const existingAuthUser = authUsers?.users?.find(
+        (u: any) => u.email === email
+      );
+      
+      if (existingAuthUser) {
+        userId = existingAuthUser.id;
+        // Ensure profile exists
+        await supabase.from("profiles").upsert({
+          user_id: existingAuthUser.id,
+          email: email,
+        }, { onConflict: "user_id" });
+      }
     }
 
-    try {
-      // Find or create user profile by email
-      let userId = null;
-      
-      if (userAttrs?.email) {
-        // First check if profile exists with this email
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("user_id")
-          .eq("email", userAttrs.email)
-          .maybeSingle();
+    // If no user found, CREATE a new user account
+    if (!userId) {
+      try {
+        generatedPassword = generatePassword();
+        
+        // Create user via Supabase Auth Admin
+        const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
+          email: email,
+          password: generatedPassword,
+          email_confirm: true, // Auto-confirm the email
+          user_metadata: {
+            created_from_panel_sync: true,
+            sync_date: new Date().toISOString(),
+          },
+        });
 
-        if (profile) {
-          userId = profile.user_id;
-        } else {
-          // Check auth.users
-          const { data: authUsers } = await supabase.auth.admin.listUsers();
-          const existingAuthUser = authUsers?.users?.find(
-            (u: any) => u.email === userAttrs.email
-          );
-          
-          if (existingAuthUser) {
-            userId = existingAuthUser.id;
+        if (createError) {
+          console.error(`Failed to create user for ${email}:`, createError);
+          for (const server of servers) {
+            errors.push({ 
+              id: server.attributes.id, 
+              name: server.attributes.name, 
+              error: `Failed to create user: ${createError.message}` 
+            });
           }
+          continue;
         }
-      }
 
-      if (!userId) {
-        skipped.push({ id: attrs.id, name: serverName, reason: "no_matching_user", email: userAttrs?.email });
+        userId = newUser.user.id;
+        isNewUser = true;
+
+        // Create profile for new user
+        await supabase.from("profiles").insert({
+          user_id: userId,
+          email: email,
+        });
+
+        // Assign user role
+        await supabase.from("user_roles").insert({
+          user_id: userId,
+          role: "user",
+        });
+
+        console.log(`Created new user account for ${email}, userId: ${userId}`);
+        
+        newUsersCreated.push({
+          email,
+          userId,
+          serverCount: servers.length,
+        });
+      } catch (err: any) {
+        console.error(`Error creating user for ${email}:`, err);
+        for (const server of servers) {
+          errors.push({ 
+            id: server.attributes.id, 
+            name: server.attributes.name, 
+            error: `User creation failed: ${err.message}` 
+          });
+        }
+        continue;
+      }
+    }
+
+    // Process all servers for this user
+    const userServerNames: string[] = [];
+    
+    for (const server of servers) {
+      const attrs = server.attributes;
+      const externalId = attrs.external_id || attrs.uuid;
+      const serverName = attrs.name;
+      const createdAt = attrs.created_at;
+      const suspended = attrs.suspended;
+
+      // Skip if already exists
+      if (existingServerIds.has(externalId) || existingServerIds.has(attrs.uuid)) {
+        skipped.push({ id: attrs.id, name: serverName, reason: "already_exists" });
         continue;
       }
 
-      // Create order for this server
-      const serverDetails = {
-        plan_name: serverName,
-        panel_server_id: attrs.id,
-        synced_from_panel: true,
-        sync_date: new Date().toISOString(),
-        limits: attrs.limits,
-        feature_limits: attrs.feature_limits,
-      };
+      try {
+        // Create order for this server
+        const serverDetails = {
+          plan_name: serverName,
+          panel_server_id: attrs.id,
+          synced_from_panel: true,
+          sync_date: new Date().toISOString(),
+          limits: attrs.limits,
+          feature_limits: attrs.feature_limits,
+        };
 
-      // Calculate next_due_date: 30 days from server creation
-      const created = new Date(createdAt);
-      const nextDueDate = new Date(created.getTime() + 30 * 24 * 60 * 60 * 1000);
+        // Calculate next_due_date: 30 days from server creation
+        const created = new Date(createdAt);
+        const nextDueDate = new Date(created.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-      const { error: insertError } = await supabase.from("orders").insert({
-        user_id: userId,
-        server_id: externalId || attrs.uuid,
-        status: suspended ? "suspended" : "active",
-        price: 0, // Unknown from panel, admin can update
-        billing_cycle: "monthly",
-        server_details: serverDetails,
-        next_due_date: nextDueDate.toISOString(),
-        created_at: createdAt,
-        notes: `Imported from Pterodactyl panel on ${new Date().toISOString()}`,
-      });
-
-      if (insertError) {
-        errors.push({ id: attrs.id, name: serverName, error: insertError.message });
-      } else {
-        imported.push({ 
-          id: attrs.id, 
-          name: serverName, 
-          userId,
-          status: suspended ? "suspended" : "active"
+        const { error: insertError } = await supabase.from("orders").insert({
+          user_id: userId,
+          server_id: externalId || attrs.uuid,
+          status: suspended ? "suspended" : "active",
+          price: 0, // Unknown from panel, admin can update
+          billing_cycle: "monthly",
+          server_details: serverDetails,
+          next_due_date: nextDueDate.toISOString(),
+          created_at: createdAt,
+          notes: `Imported from Pterodactyl panel on ${new Date().toISOString()}`,
         });
+
+        if (insertError) {
+          errors.push({ id: attrs.id, name: serverName, error: insertError.message });
+        } else {
+          imported.push({ 
+            id: attrs.id, 
+            name: serverName, 
+            userId,
+            status: suspended ? "suspended" : "active",
+            isNewUser,
+          });
+          userServerNames.push(serverName);
+        }
+      } catch (err: any) {
+        errors.push({ id: attrs.id, name: serverName, error: err.message });
       }
-    } catch (err: any) {
-      errors.push({ id: attrs.id, name: serverName, error: err.message });
+    }
+
+    // Send welcome email to new users with their credentials and server list
+    if (isNewUser && generatedPassword && userServerNames.length > 0) {
+      try {
+        console.log(`Sending sync welcome email to new user: ${email}`);
+        
+        await supabase.functions.invoke('send-email', {
+          body: {
+            action: 'sync-welcome',
+            to: email,
+            password: generatedPassword,
+            panelUrl: apiUrl,
+            servers: userServerNames,
+          }
+        });
+        
+        console.log(`Sync welcome email sent to ${email}`);
+      } catch (emailErr) {
+        console.error(`Failed to send welcome email to ${email}:`, emailErr);
+        // Non-blocking - continue with sync
+      }
     }
   }
 
@@ -1239,10 +1347,12 @@ async function syncServersFromPanel(
     imported: imported.length,
     skipped: skipped.length,
     errors: errors.length,
+    newUsersCreated: newUsersCreated.length,
     details: {
       imported,
       skipped,
       errors,
+      newUsersCreated,
     },
   };
 }

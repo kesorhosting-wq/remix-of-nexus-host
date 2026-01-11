@@ -14,7 +14,7 @@ import {
   Shield, Home, LogOut, Package, FileText, MessageSquare, 
   DollarSign, Users, Server, Eye, Send, RefreshCw, Loader2,
   CheckCircle, XCircle, Clock, AlertCircle, CreditCard, Trash2, Pause, SquareCheck,
-  Mail, Play, Calendar, AlertTriangle
+  Mail, Play, Calendar, AlertTriangle, Edit2, Check, X
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -32,6 +32,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { format } from "date-fns";
 import LoadingScreen from "@/components/LoadingScreen";
+import { SyncServersDialog } from "@/components/admin/SyncServersDialog";
 
 interface Order {
   id: string;
@@ -147,8 +148,9 @@ const AdminDashboard = () => {
   const [runningDailyJob, setRunningDailyJob] = useState(false);
   const [dailyJobResult, setDailyJobResult] = useState<any>(null);
   const [unsuspendingOrder, setUnsuspendingOrder] = useState<string | null>(null);
-  const [syncingServers, setSyncingServers] = useState(false);
-  const [syncResult, setSyncResult] = useState<any>(null);
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false);
+  const [editingPrice, setEditingPrice] = useState<string | null>(null);
+  const [tempPrice, setTempPrice] = useState<number>(0);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -240,31 +242,31 @@ const AdminDashboard = () => {
     }
   };
 
-  const handleSyncServers = async () => {
-    setSyncingServers(true);
-    setSyncResult(null);
-    
+  const handleUpdateOrderPrice = async (orderId: string, newPrice: number) => {
     try {
-      const { data, error } = await supabase.functions.invoke("pterodactyl", {
-        body: { action: "sync-servers" }
-      });
+      const { error } = await supabase
+        .from("orders")
+        .update({ price: newPrice })
+        .eq("id", orderId);
       
       if (error) throw error;
       
-      setSyncResult(data);
-      toast({ 
-        title: "Server sync completed!",
-        description: `${data.imported || 0} imported, ${data.skipped || 0} skipped, ${data.errors || 0} errors`
-      });
-      
-      // Refresh data to show imported orders
+      toast({ title: "Price updated successfully" });
+      setEditingPrice(null);
       fetchData();
     } catch (error: any) {
-      console.error("Sync servers error:", error);
-      toast({ title: "Sync failed", description: error.message, variant: "destructive" });
-    } finally {
-      setSyncingServers(false);
+      toast({ title: "Failed to update price", description: error.message, variant: "destructive" });
     }
+  };
+
+  const startEditingPrice = (orderId: string, currentPrice: number) => {
+    setEditingPrice(orderId);
+    setTempPrice(currentPrice);
+  };
+
+  const cancelEditingPrice = () => {
+    setEditingPrice(null);
+    setTempPrice(0);
   };
 
   const handleProvisionServer = async (order: Order) => {
@@ -980,15 +982,10 @@ const AdminDashboard = () => {
                     <Button 
                       variant="outline" 
                       size="sm" 
-                      onClick={handleSyncServers}
-                      disabled={syncingServers}
+                      onClick={() => setSyncDialogOpen(true)}
                       className="gap-1"
                     >
-                      {syncingServers ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Server className="w-4 h-4" />
-                      )}
+                      <Server className="w-4 h-4" />
                       Sync Panel
                     </Button>
                     <Button variant="outline" size="sm" onClick={fetchData}>
@@ -1030,7 +1027,48 @@ const AdminDashboard = () => {
                         <TableCell className="font-mono text-xs">{order.id.slice(0, 8)}</TableCell>
                         <TableCell>{order.user_email || "N/A"}</TableCell>
                         <TableCell>{order.server_details?.name || "N/A"}</TableCell>
-                        <TableCell>${order.price.toFixed(2)}</TableCell>
+                        <TableCell>
+                          {editingPrice === order.id ? (
+                            <div className="flex items-center gap-1">
+                              <div className="relative">
+                                <DollarSign className="w-3 h-3 absolute left-1.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={tempPrice}
+                                  onChange={(e) => setTempPrice(parseFloat(e.target.value) || 0)}
+                                  className="pl-5 h-7 w-20 text-xs"
+                                  autoFocus
+                                />
+                              </div>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="h-6 w-6"
+                                onClick={() => handleUpdateOrderPrice(order.id, tempPrice)}
+                              >
+                                <Check className="w-3 h-3 text-green-500" />
+                              </Button>
+                              <Button 
+                                size="icon" 
+                                variant="ghost" 
+                                className="h-6 w-6"
+                                onClick={cancelEditingPrice}
+                              >
+                                <X className="w-3 h-3 text-red-500" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <div 
+                              className="flex items-center gap-1 cursor-pointer hover:text-primary group"
+                              onClick={() => startEditingPrice(order.id, order.price)}
+                            >
+                              <span>${order.price.toFixed(2)}</span>
+                              <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </div>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <Badge className={statusColors[order.status] || ""}>{order.status}</Badge>
                         </TableCell>
@@ -1731,6 +1769,13 @@ const AdminDashboard = () => {
             </Card>
           </TabsContent>
         </Tabs>
+        
+        {/* Sync Servers Dialog */}
+        <SyncServersDialog 
+          open={syncDialogOpen}
+          onOpenChange={setSyncDialogOpen}
+          onComplete={fetchData}
+        />
       </div>
     </div>
   );

@@ -52,7 +52,7 @@ const ALLOWED_ACTIONS = [
   "server-setup-complete", "renewal-reminder", "service-suspended",
   "service-terminated", "service-reactivated", "panel-credentials",
   "panel-password-reset", "server-suspended-overdue", "payment-reminder",
-  "server-age-warning"
+  "server-age-warning", "sync-welcome"
 ] as const;
 
 function validateAction(action: unknown): typeof ALLOWED_ACTIONS[number] {
@@ -529,6 +529,29 @@ serve(async (req) => {
         
         const html = generateServerAgeWarningEmail(to, serverName, createdAt, daysOld, daysUntilSuspension, paymentUrl, settings.from_name);
         await sendEmail(settings, to, `⚠️ Warning: Your server ${serverName} will be suspended in ${daysUntilSuspension} days`, html, supabase, action, { orderId, daysOld, daysUntilSuspension });
+        
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "sync-welcome": {
+        const { password, panelUrl, servers } = body;
+        
+        if (!to) throw new Error("Recipient email not provided");
+        if (!password) throw new Error("Password not provided");
+        if (!servers || !Array.isArray(servers)) throw new Error("Servers list not provided");
+        
+        const html = generateSyncWelcomeEmail(to, password, panelUrl, servers, settings.from_name);
+        await sendEmail(
+          settings, 
+          to, 
+          `🎮 Welcome! Your Account & ${servers.length} Server${servers.length > 1 ? 's' : ''} Are Ready`, 
+          html, 
+          supabase, 
+          action, 
+          { serverCount: servers.length }
+        );
         
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1470,6 +1493,125 @@ function generateServerAgeWarningEmail(
         <p style="text-align: center; color: #9ca3af; font-size: 14px; margin-top: 20px;">
           ${brandName} • Server Age Warning
         </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generateSyncWelcomeEmail(
+  email: string,
+  password: string,
+  panelUrl: string,
+  servers: string[],
+  brandName: string
+): string {
+  const userName = email.split("@")[0];
+  const serverListHtml = servers.map((name, i) => `
+    <tr>
+      <td style="padding: 12px 16px; color: #6b7280; border-bottom: 1px solid #e5e7eb;">${i + 1}</td>
+      <td style="padding: 12px 16px; font-weight: 600; color: #111827; border-bottom: 1px solid #e5e7eb;">🎮 ${name}</td>
+    </tr>
+  `).join("");
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #0f172a;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%); padding: 50px 40px; border-radius: 24px 24px 0 0; text-align: center; position: relative; overflow: hidden;">
+          <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"none\" stroke=\"rgba(255,255,255,0.1)\" stroke-width=\"0.5\"/></svg>'); opacity: 0.3;"></div>
+          <div style="position: relative; z-index: 1;">
+            <div style="width: 100px; height: 100px; background: linear-gradient(135deg, #ffffff 0%, #f0f0f0 100%); border-radius: 50%; margin: 0 auto 24px; display: flex; align-items: center; justify-content: center; box-shadow: 0 20px 40px rgba(0,0,0,0.3);">
+              <span style="font-size: 50px;">🎮</span>
+            </div>
+            <h1 style="color: white; margin: 0; font-size: 32px; font-weight: 700; text-shadow: 0 2px 10px rgba(0,0,0,0.2);">Welcome to ${brandName}!</h1>
+            <p style="color: rgba(255,255,255,0.9); margin: 12px 0 0 0; font-size: 18px;">Your account is ready</p>
+          </div>
+        </div>
+        
+        <!-- Main Content -->
+        <div style="background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%); padding: 40px; border-radius: 0 0 24px 24px; box-shadow: 0 25px 50px rgba(0,0,0,0.5);">
+          
+          <p style="color: #e2e8f0; font-size: 18px; line-height: 1.6; margin-bottom: 30px;">
+            Hello <strong style="color: #a5b4fc;">${userName}</strong>! 🎉
+          </p>
+          
+          <p style="color: #94a3b8; font-size: 16px; line-height: 1.7;">
+            Your account has been created for our hosting service. Below are your login credentials and a list of your ${servers.length} server${servers.length > 1 ? 's' : ''}.
+          </p>
+          
+          <!-- Credentials Box -->
+          <div style="background: linear-gradient(135deg, #312e81 0%, #1e1b4b 100%); border-radius: 16px; padding: 28px; margin: 30px 0; border: 1px solid #4338ca;">
+            <h3 style="margin: 0 0 20px 0; color: #c7d2fe; font-size: 16px; text-transform: uppercase; letter-spacing: 1px;">🔐 Login Credentials</h3>
+            <table style="width: 100%;">
+              <tr>
+                <td style="padding: 10px 0; color: #a5b4fc; font-size: 14px;">Email</td>
+                <td style="padding: 10px 0; text-align: right; color: #ffffff; font-family: 'Monaco', monospace; font-size: 14px; background: #1e1b4b; padding: 8px 12px; border-radius: 6px;">${email}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 0; color: #a5b4fc; font-size: 14px;">Password</td>
+                <td style="padding: 10px 0; text-align: right; color: #fbbf24; font-family: 'Monaco', monospace; font-size: 14px; background: #1e1b4b; padding: 8px 12px; border-radius: 6px; font-weight: 600;">${password}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <!-- Servers List -->
+          <div style="background: #1e293b; border-radius: 16px; padding: 28px; margin: 30px 0; border: 1px solid #334155;">
+            <h3 style="margin: 0 0 20px 0; color: #e2e8f0; font-size: 16px; text-transform: uppercase; letter-spacing: 1px;">🖥️ Your Servers (${servers.length})</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr style="background: #0f172a;">
+                  <th style="padding: 12px 16px; text-align: left; color: #64748b; font-size: 12px; text-transform: uppercase; border-bottom: 2px solid #334155;">#</th>
+                  <th style="padding: 12px 16px; text-align: left; color: #64748b; font-size: 12px; text-transform: uppercase; border-bottom: 2px solid #334155;">Server Name</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${serverListHtml}
+              </tbody>
+            </table>
+          </div>
+          
+          <!-- Important Notice -->
+          <div style="background: linear-gradient(135deg, #7c2d12 0%, #451a03 100%); border-radius: 12px; padding: 24px; margin: 30px 0; border: 1px solid #c2410c;">
+            <p style="margin: 0; color: #fed7aa; font-size: 15px; line-height: 1.6;">
+              <strong style="color: #fb923c;">⚠️ Important:</strong> Please login to renew your next invoice and keep your servers running. Unpaid invoices may result in service suspension.
+            </p>
+          </div>
+          
+          <!-- CTA Button -->
+          <a href="${panelUrl.replace(/\/$/, '')}/client" style="display: block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; text-decoration: none; padding: 20px 40px; border-radius: 12px; font-weight: 700; text-align: center; margin-top: 30px; font-size: 18px; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.4); transition: all 0.3s;">
+            🚀 Login to Client Area
+          </a>
+          
+          <!-- Game Panel Link -->
+          <a href="${panelUrl}" style="display: block; background: transparent; color: #a5b4fc; text-decoration: none; padding: 16px 40px; border-radius: 12px; font-weight: 600; text-align: center; margin-top: 16px; font-size: 16px; border: 2px solid #4338ca;">
+            🎮 Access Game Panel
+          </a>
+          
+          <!-- Security Note -->
+          <div style="margin-top: 30px; padding-top: 30px; border-top: 1px solid #334155;">
+            <p style="color: #64748b; font-size: 13px; line-height: 1.6; margin: 0;">
+              🔒 <strong>Security Tip:</strong> For your security, we recommend changing your password after your first login.
+            </p>
+          </div>
+        </div>
+        
+        <!-- Footer -->
+        <div style="text-align: center; margin-top: 30px;">
+          <p style="color: #64748b; font-size: 14px; margin: 0;">
+            ${brandName} • Game Server Hosting
+          </p>
+          <p style="color: #475569; font-size: 12px; margin: 10px 0 0 0;">
+            Questions? Contact our support team anytime.
+          </p>
+        </div>
       </div>
     </body>
     </html>

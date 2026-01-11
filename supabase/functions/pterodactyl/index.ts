@@ -71,7 +71,7 @@ async function requireOrderOwner(req: Request, orderId: string): Promise<AuthRes
 
 // ============= Input Validation =============
 
-const ALLOWED_ACTIONS = ["test", "get-panel-data", "create", "power", "suspend", "unsuspend", "terminate", "status", "reset-password", "sync-servers"] as const;
+const ALLOWED_ACTIONS = ["test", "get-panel-data", "create", "power", "suspend", "unsuspend", "terminate", "status", "reset-password", "sync-servers", "preview-sync"] as const;
 const ALLOWED_POWER_SIGNALS = ["start", "stop", "restart", "kill"] as const;
 
 function validateAction(action: unknown): typeof ALLOWED_ACTIONS[number] {
@@ -315,9 +315,19 @@ serve(async (req) => {
       }
 
       case "sync-servers": {
-        // ADMIN ONLY: Sync all servers from Pterodactyl panel to orders
+        // ADMIN ONLY: Sync all servers from Pterodactyl panel to orders with custom prices
         await requireAdmin(req);
-        const result = await syncServersFromPanel(config.apiUrl, apiHeaders, supabase);
+        const serverPrices = body.serverPrices || {};
+        const result = await syncServersFromPanel(config.apiUrl, apiHeaders, supabase, serverPrices);
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "preview-sync": {
+        // ADMIN ONLY: Preview servers from Pterodactyl panel before syncing
+        await requireAdmin(req);
+        const result = await previewServersFromPanel(config.apiUrl, apiHeaders);
         return new Response(JSON.stringify(result), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -1095,12 +1105,71 @@ async function resetUserPassword(apiUrl: string, headers: Record<string, string>
   };
 }
 
+// ============= Preview Servers From Panel =============
+
+async function previewServersFromPanel(
+  apiUrl: string,
+  headers: Record<string, string>
+) {
+  console.log("Previewing servers from Pterodactyl panel...");
+
+  let allServers: any[] = [];
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const serversRes = await fetch(
+      `${apiUrl}/api/application/servers?page=${page}&include=user`,
+      { headers }
+    );
+
+    if (!serversRes.ok) {
+      throw new Error("Failed to fetch servers from panel");
+    }
+
+    const serversData = await serversRes.json();
+    allServers = allServers.concat(serversData.data || []);
+    
+    const meta = serversData.meta?.pagination;
+    if (meta && meta.current_page < meta.total_pages) {
+      page++;
+    } else {
+      hasMore = false;
+    }
+  }
+
+  console.log(`Found ${allServers.length} servers in panel for preview`);
+
+  // Map servers to simplified format
+  const servers = allServers.map((server: any) => {
+    const attrs = server.attributes;
+    const userAttrs = attrs.relationships?.user?.attributes;
+    return {
+      id: attrs.id,
+      uuid: attrs.uuid,
+      external_id: attrs.external_id,
+      name: attrs.name,
+      email: userAttrs?.email || "unknown",
+      suspended: attrs.suspended,
+      limits: attrs.limits,
+      created_at: attrs.created_at,
+    };
+  });
+
+  return {
+    success: true,
+    totalInPanel: servers.length,
+    servers,
+  };
+}
+
 // ============= Sync Servers From Panel =============
 
 async function syncServersFromPanel(
   apiUrl: string,
   headers: Record<string, string>,
-  supabase: any
+  supabase: any,
+  serverPrices: Record<string, number> = {}
 ) {
   console.log("Syncing servers from Pterodactyl panel...");
 
@@ -1289,16 +1358,20 @@ async function syncServersFromPanel(
         const created = new Date(createdAt);
         const nextDueDate = new Date(created.getTime() + 30 * 24 * 60 * 60 * 1000);
 
+        // Get custom price from serverPrices map, default to 0
+        const serverUuid = attrs.uuid;
+        const customPrice = serverPrices[serverUuid] ?? 0;
+
         const { error: insertError } = await supabase.from("orders").insert({
           user_id: userId,
           server_id: externalId || attrs.uuid,
           status: suspended ? "suspended" : "active",
-          price: 0, // Unknown from panel, admin can update
+          price: customPrice,
           billing_cycle: "monthly",
           server_details: serverDetails,
           next_due_date: nextDueDate.toISOString(),
           created_at: createdAt,
-          notes: `Imported from Pterodactyl panel on ${new Date().toISOString()}`,
+          notes: `Imported from Pterodactyl panel on ${new Date().toISOString()}. Price: $${customPrice}/month`,
         });
 
         if (insertError) {

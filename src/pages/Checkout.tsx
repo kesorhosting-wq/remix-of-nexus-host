@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
@@ -8,46 +8,36 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Server, CreditCard, ArrowLeft, Loader2, Wallet, AlertCircle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Server, CreditCard, ArrowLeft, Loader2, AlertCircle, Zap, Package } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/contexts/CartContext";
 import IkhodePaymentCard from "@/components/IkhodePaymentCard";
 import { useIkhodePayment } from "@/hooks/useIkhodePayment";
 import LoadingScreen from "@/components/LoadingScreen";
+import abaPaywayIcon from "@/assets/aba-payway.svg";
 
-interface GamePlan {
-  id: string;
-  name: string;
-  plan_id: string;
-  game_id: string;
-  price: number;
-  ram: string | null;
-  cpu: string | null;
-  storage: string | null;
-  slots: string | null;
-}
-
-interface Game {
-  game_id: string;
-  name: string;
-  icon: string | null;
+interface PlanConfig {
+  nestId: number | null;
+  nestName: string | null;
+  eggId: number | null;
+  eggName: string | null;
 }
 
 const Checkout = () => {
-  const { planId } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user, loading: authLoading } = useAuth();
-
-  const [plan, setPlan] = useState<GamePlan | null>(null);
-  const [game, setGame] = useState<Game | null>(null);
+  const { items, getTotal, clearCart, itemCount } = useCart();
+  
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState("ikhode");
-  const [serverName, setServerName] = useState("");
+  const [serverNames, setServerNames] = useState<Record<string, string>>({});
+  const [planConfigs, setPlanConfigs] = useState<Record<string, PlanConfig>>({});
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [orderId, setOrderId] = useState<string | null>(null);
-  const [transactionId, setTransactionId] = useState<string | null>(null);
+  const [invoiceId, setInvoiceId] = useState<string | null>(null);
   const [wsUrl, setWsUrl] = useState<string | null>(null);
   const [ikhodeAvailable, setIkhodeAvailable] = useState(false);
   const [emailVerified, setEmailVerified] = useState(false);
@@ -60,15 +50,20 @@ const Checkout = () => {
       navigate("/auth");
       return;
     }
-    if (planId) fetchPlanData();
-    checkIkhodeAvailability();
-    if (user) verifyUserEmail();
-  }, [planId, user, authLoading]);
+    if (items.length === 0 && !authLoading) {
+      navigate("/cart");
+      return;
+    }
+    if (user) {
+      verifyUserEmail();
+      checkIkhodeAvailability();
+      fetchPlanConfigs();
+    }
+  }, [user, authLoading, items.length]);
 
   const verifyUserEmail = async () => {
     setCheckingEmail(true);
     try {
-      // Check if user has a valid email
       if (!user?.email) {
         setEmailVerified(false);
         toast({
@@ -79,7 +74,6 @@ const Checkout = () => {
         return;
       }
 
-      // Ensure the email is in the profiles table
       const { data: profile, error } = await supabase
         .from("profiles")
         .select("email")
@@ -87,7 +81,6 @@ const Checkout = () => {
         .single();
 
       if (error || !profile?.email) {
-        // Update profile with the user's email from auth
         await supabase
           .from("profiles")
           .upsert({ 
@@ -107,44 +100,65 @@ const Checkout = () => {
 
   const checkIkhodeAvailability = async () => {
     const config = await fetchConfig();
-    if (config?.apiUrl) {
-      setIkhodeAvailable(true);
-      setPaymentMethod("ikhode");
-    }
+    setIkhodeAvailable(!!config?.apiUrl);
   };
 
-  const fetchPlanData = async () => {
+  const fetchPlanConfigs = async () => {
     try {
-      const { data: planData, error } = await supabase
+      const planIds = [...new Set(items.map(item => item.planId))];
+      
+      const { data: plans, error } = await supabase
         .from("game_plans")
-        .select("*")
-        .eq("id", planId)
-        .single();
+        .select("id, pterodactyl_nest_id, pterodactyl_egg_id")
+        .in("id", planIds);
 
-      if (error || !planData) {
-        toast({ title: "Plan not found", variant: "destructive" });
-        navigate("/products");
-        return;
+      if (error) throw error;
+
+      // Fetch nest and egg names from Pterodactyl
+      const configs: Record<string, PlanConfig> = {};
+      
+      for (const plan of plans || []) {
+        let nestName = null;
+        let eggName = null;
+
+        if (plan.pterodactyl_nest_id) {
+          try {
+            const { data } = await supabase.functions.invoke("pterodactyl", {
+              body: { action: "get-nests" }
+            });
+            const nest = data?.data?.find((n: any) => n.attributes.id === plan.pterodactyl_nest_id);
+            nestName = nest?.attributes?.name || `Nest ${plan.pterodactyl_nest_id}`;
+            
+            if (plan.pterodactyl_egg_id && nest) {
+              const eggData = await supabase.functions.invoke("pterodactyl", {
+                body: { action: "get-eggs", nestId: plan.pterodactyl_nest_id }
+              });
+              const egg = eggData.data?.data?.find((e: any) => e.attributes.id === plan.pterodactyl_egg_id);
+              eggName = egg?.attributes?.name || `Egg ${plan.pterodactyl_egg_id}`;
+            }
+          } catch (e) {
+            console.error("Error fetching nest/egg names:", e);
+          }
+        }
+
+        configs[plan.id] = {
+          nestId: plan.pterodactyl_nest_id,
+          nestName,
+          eggId: plan.pterodactyl_egg_id,
+          eggName,
+        };
       }
 
-      setPlan(planData);
-
-      const { data: gameData } = await supabase
-        .from("games")
-        .select("game_id, name, icon")
-        .eq("game_id", planData.game_id)
-        .single();
-
-      if (gameData) setGame(gameData);
+      setPlanConfigs(configs);
     } catch (error) {
-      console.error("Error fetching plan:", error);
+      console.error("Error fetching plan configs:", error);
     } finally {
       setLoading(false);
     }
   };
 
   const handleCheckout = async () => {
-    if (!user || !plan) return;
+    if (!user) return;
 
     if (!emailVerified) {
       toast({ 
@@ -155,30 +169,47 @@ const Checkout = () => {
       return;
     }
 
-    if (!serverName.trim()) {
-      toast({ title: "Please enter a server name", variant: "destructive" });
-      return;
+    // Validate server names
+    for (const item of items) {
+      if (!serverNames[item.id]?.trim()) {
+        toast({ 
+          title: "Please enter server names", 
+          description: `Enter a name for ${item.gameName} - ${item.planName}`,
+          variant: "destructive" 
+        });
+        return;
+      }
     }
 
     setProcessing(true);
 
     try {
-      // Create order
+      const total = getTotal();
+      
+      // Create a combined order for all items
       const { data: order, error: orderError } = await supabase
         .from("orders")
         .insert({
           user_id: user.id,
-          price: plan.price,
+          price: total,
           status: "pending",
           billing_cycle: "monthly",
           server_details: {
-            name: serverName,
-            game_id: plan.game_id,
-            plan_id: plan.plan_id,
-            plan_name: plan.name,
-            ram: plan.ram,
-            cpu: plan.cpu,
-            storage: plan.storage,
+            items: items.map(item => {
+              const config = planConfigs[item.planId];
+              return {
+                server_name: serverNames[item.id],
+                game_id: item.gameId,
+                plan_id: item.planId,
+                plan_name: item.planName,
+                ram: item.ram,
+                cpu: item.cpu,
+                storage: item.storage,
+                pterodactyl_nest_id: config?.nestId,
+                pterodactyl_egg_id: config?.eggId,
+                quantity: item.quantity,
+              };
+            }),
           },
         })
         .select()
@@ -199,8 +230,8 @@ const Checkout = () => {
           user_id: user.id,
           order_id: order.id,
           invoice_number: invoiceNumber,
-          subtotal: plan.price,
-          total: plan.price,
+          subtotal: total,
+          total: total,
           due_date: dueDate.toISOString(),
           status: "unpaid",
         })
@@ -209,9 +240,11 @@ const Checkout = () => {
 
       if (invoiceError) throw invoiceError;
 
-      // Generate QR using ABA PayWay (Ikhode gateway)
+      setInvoiceId(invoice.id);
+
+      // Generate QR using ABA PayWay
       const result = await generateKHQR(
-        plan.price,
+        total,
         invoice.id,
         user?.email,
         user?.email?.split("@")[0]
@@ -219,7 +252,6 @@ const Checkout = () => {
 
       if (result) {
         setQrCode(result.qrCodeData);
-        setTransactionId(invoice.id);
         setWsUrl(result.wsUrl || getWebSocketUrl());
         toast({ title: "Order created! Scan QR to pay." });
       } else {
@@ -237,11 +269,21 @@ const Checkout = () => {
     }
   };
 
+  const handlePaymentComplete = () => {
+    clearCart();
+    navigate("/client");
+  };
+
+  const handleCancelPayment = () => {
+    setQrCode(null);
+    setOrderId(null);
+    setInvoiceId(null);
+    setWsUrl(null);
+  };
+
   if (loading || authLoading || checkingEmail) {
     return <LoadingScreen />;
   }
-
-  if (!plan) return null;
 
   if (!emailVerified) {
     return (
@@ -260,12 +302,12 @@ const Checkout = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                A valid email is required to create your Pterodactyl panel account and receive important notifications about your server.
+                A valid email is required to create your panel account and receive important notifications.
               </p>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={() => navigate("/products")}>
+                <Button variant="outline" onClick={() => navigate("/cart")}>
                   <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back to Products
+                  Back to Cart
                 </Button>
                 <Button onClick={() => navigate("/client")}>
                   Go to Account Settings
@@ -286,107 +328,170 @@ const Checkout = () => {
         <Button
           variant="ghost"
           className="mb-6 gap-2"
-          onClick={() => navigate("/products")}
+          onClick={() => navigate("/cart")}
         >
           <ArrowLeft className="w-4 h-4" />
-          Back to Products
+          Back to Cart
         </Button>
 
-        <div className="grid lg:grid-cols-2 gap-8">
-          {/* Order Summary */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Server className="w-5 h-5 text-primary" />
-                Order Summary
-              </CardTitle>
-              <CardDescription>Review your server configuration</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-4 p-4 bg-muted rounded-lg">
-                <span className="text-3xl">{game?.icon || "🎮"}</span>
-                <div>
-                  <h3 className="font-semibold">{game?.name} Server</h3>
-                  <p className="text-sm text-muted-foreground">{plan.name}</p>
-                </div>
-              </div>
+        <h1 className="font-display text-3xl font-bold mb-8 flex items-center gap-3">
+          <CreditCard className="w-8 h-8 text-primary" />
+          Checkout
+          <span className="text-sm font-normal text-muted-foreground">
+            ({itemCount} {itemCount === 1 ? "server" : "servers"})
+          </span>
+        </h1>
 
-              <div className="space-y-2 text-sm">
-                {plan.ram && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">RAM</span>
-                    <span>{plan.ram}</span>
-                  </div>
-                )}
-                {plan.cpu && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">CPU</span>
-                    <span>{plan.cpu}</span>
-                  </div>
-                )}
-                {plan.storage && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Storage</span>
-                    <span>{plan.storage}</span>
-                  </div>
-                )}
-                {plan.slots && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Player Slots</span>
-                    <span>{plan.slots}</span>
-                  </div>
-                )}
-              </div>
+        {qrCode ? (
+          <div className="max-w-md mx-auto">
+            <IkhodePaymentCard
+              qrCode={qrCode}
+              amount={getTotal()}
+              currency="USD"
+              invoiceId={invoiceId || ""}
+              description={`${items.length} server(s)`}
+              onCancel={handleCancelPayment}
+              onComplete={handlePaymentComplete}
+              wsUrl={wsUrl || undefined}
+            />
+          </div>
+        ) : (
+          <div className="grid lg:grid-cols-2 gap-8">
+            {/* Server Configuration */}
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Server className="w-5 h-5 text-primary" />
+                    Server Configuration
+                  </CardTitle>
+                  <CardDescription>Enter a name for each server</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {items.map((item, index) => {
+                    const config = planConfigs[item.planId];
+                    return (
+                      <div key={item.id} className="space-y-4 p-4 rounded-lg bg-muted/50">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center">
+                            {item.gameIcon.startsWith("/") || item.gameIcon.startsWith("http") ? (
+                              <img src={item.gameIcon} alt={item.gameName} className="w-8 h-8 object-contain rounded" />
+                            ) : (
+                              <span className="text-2xl">{item.gameIcon}</span>
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="font-semibold">{item.gameName}</h3>
+                            <p className="text-sm text-muted-foreground">{item.planName}</p>
+                          </div>
+                          <Badge variant="secondary">${item.price.toFixed(2)}/mo</Badge>
+                        </div>
 
-              <Separator />
+                        <div className="space-y-2">
+                          <Label htmlFor={`server-${item.id}`}>Server Name</Label>
+                          <Input
+                            id={`server-${item.id}`}
+                            placeholder="My Awesome Server"
+                            value={serverNames[item.id] || ""}
+                            onChange={(e) =>
+                              setServerNames({ ...serverNames, [item.id]: e.target.value })
+                            }
+                          />
+                        </div>
 
-              <div className="flex justify-between text-lg font-semibold">
-                <span>Total</span>
-                <span className="text-primary">${plan.price.toFixed(2)}/month</span>
-              </div>
-            </CardContent>
-          </Card>
+                        {/* Admin-configured Nest/Egg (Read-only display) */}
+                        {(config?.nestName || config?.eggName) && (
+                          <div className="grid grid-cols-2 gap-3">
+                            {config?.nestName && (
+                              <div className="p-3 rounded-lg bg-background border">
+                                <p className="text-xs text-muted-foreground mb-1">Nest</p>
+                                <p className="text-sm font-medium flex items-center gap-2">
+                                  <Package className="w-4 h-4 text-primary" />
+                                  {config.nestName}
+                                </p>
+                              </div>
+                            )}
+                            {config?.eggName && (
+                              <div className="p-3 rounded-lg bg-background border">
+                                <p className="text-xs text-muted-foreground mb-1">Game Type</p>
+                                <p className="text-sm font-medium flex items-center gap-2">
+                                  <Server className="w-4 h-4 text-primary" />
+                                  {config.eggName}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
 
-          {/* Payment */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <CreditCard className="w-5 h-5 text-primary" />
-                Payment
-              </CardTitle>
-              <CardDescription>
-                {qrCode ? "Scan QR code to complete payment" : "Configure your server and pay"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {!qrCode ? (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="serverName">Server Name</Label>
-                    <Input
-                      id="serverName"
-                      placeholder="My Awesome Server"
-                      value={serverName}
-                      onChange={(e) => setServerName(e.target.value)}
-                    />
-                  </div>
+                        {item.quantity > 1 && (
+                          <p className="text-sm text-muted-foreground">
+                            × {item.quantity} servers
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            </div>
 
+            {/* Payment */}
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-primary" />
+                    Payment
+                  </CardTitle>
+                  <CardDescription>Select payment method and complete order</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {/* Order Summary */}
                   <div className="space-y-3">
-                    <Label>Payment Method</Label>
-                    <div className="flex items-center space-x-3 p-4 border border-primary rounded-lg bg-primary/5">
-                      <Wallet className="w-5 h-5 text-blue-600" />
-                      <div>
-                        <span className="font-medium">ABA PayWay</span>
-                        <p className="text-xs text-muted-foreground">Real-time payment updates</p>
+                    {items.map((item) => (
+                      <div key={item.id} className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">
+                          {item.gameName} - {item.planName} {item.quantity > 1 && `×${item.quantity}`}
+                        </span>
+                        <span>${(item.price * item.quantity).toFixed(2)}</span>
+                      </div>
+                    ))}
+                    <Separator />
+                    <div className="flex justify-between font-semibold text-lg">
+                      <span>Total</span>
+                      <span className="text-primary">${getTotal().toFixed(2)}/mo</span>
+                    </div>
+                  </div>
+
+                  {/* Payment Method */}
+                  <div className="space-y-3">
+                    <Label className="text-sm font-medium">Payment Method</Label>
+                    <div className="flex items-center gap-3 p-4 rounded-lg border border-primary bg-primary/5">
+                      <div className="w-12 h-12 rounded-lg bg-white flex items-center justify-center p-2">
+                        <img src={abaPaywayIcon} alt="ABA PayWay" className="w-full h-full object-contain" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-medium flex items-center gap-2">
+                          ABA PayWay
+                          {ikhodeAvailable && (
+                            <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+                              <Zap className="w-3 h-3" />
+                              Live
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {ikhodeAvailable ? "Real-time payment updates" : "Not configured"}
+                        </p>
                       </div>
                     </div>
                   </div>
 
-                    <Button
+                  <Button
                     className="w-full"
                     size="lg"
                     onClick={handleCheckout}
-                    disabled={processing || ikhodeLoading}
+                    disabled={processing || ikhodeLoading || !ikhodeAvailable}
                   >
                     {processing || ikhodeLoading ? (
                       <>
@@ -394,24 +499,20 @@ const Checkout = () => {
                         Processing...
                       </>
                     ) : (
-                      "Proceed to Payment"
+                      "Complete Order"
                     )}
                   </Button>
-                </>
-              ) : (
-                <IkhodePaymentCard
-                  qrCode={qrCode}
-                  amount={plan.price}
-                  currency="USD"
-                  invoiceId={transactionId || ""}
-                  description={`${game?.name || "Game"} Server - ${plan.name}`}
-                  onCancel={() => navigate("/products")}
-                  wsUrl={wsUrl || undefined}
-                />
-              )}
-            </CardContent>
-          </Card>
-        </div>
+
+                  {!ikhodeAvailable && (
+                    <p className="text-sm text-center text-muted-foreground">
+                      Payment gateway not configured. Please contact admin.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        )}
       </main>
       <Footer />
     </div>

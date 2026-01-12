@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Server, HardDrive, Cpu, Database, Check, ShoppingCart } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/contexts/CartContext";
 
 interface GamePlan {
   id: string;
@@ -40,6 +41,7 @@ const Products = () => {
   const { toast } = useToast();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { addToCart } = useCart();
 
   useEffect(() => {
     fetchData();
@@ -66,18 +68,28 @@ const Products = () => {
     }
   };
 
-  const handleOrder = async (plan: GamePlan) => {
-    if (!user) {
-      toast({
-        title: "Login Required",
-        description: "Please login to order a server.",
-        variant: "destructive",
-      });
-      navigate("/auth");
-      return;
-    }
+  const handleAddToCart = (plan: GamePlan) => {
+    const game = games.find(g => g.game_id === plan.game_id);
+    if (!game) return;
 
-    navigate(`/checkout/${plan.id}`);
+    addToCart({
+      id: `${plan.game_id}-${plan.id}-${Date.now()}`,
+      planId: plan.id,
+      gameId: plan.game_id,
+      gameName: game.name,
+      gameIcon: game.icon || "🎮",
+      planName: plan.name,
+      price: plan.price || 0,
+      ram: plan.ram || "",
+      cpu: plan.cpu || "",
+      storage: plan.storage || "",
+      slots: plan.slots || "",
+    });
+
+    toast({
+      title: "Added to cart!",
+      description: `${game.name} - ${plan.name}`,
+    });
   };
 
   const filteredPlans = plans.filter((p) => p.game_id === selectedGame);
@@ -192,10 +204,10 @@ const Products = () => {
                         <Button
                           className="w-full gap-2"
                           variant={index === 1 ? "default" : "outline"}
-                          onClick={() => handleOrder(plan)}
+                          onClick={() => handleAddToCart(plan)}
                         >
                           <ShoppingCart className="w-4 h-4" />
-                          Order Now
+                          Add to Cart
                         </Button>
                       </CardFooter>
                     </Card>

@@ -109,15 +109,22 @@ async function sendEmailViaSMTP(
   to: string,
   subject: string,
   html: string
-): Promise<{ success: boolean; messageId?: string }> {
+): Promise<{ success: boolean; messageId?: string; method: string }> {
   console.log(`Sending email via SMTP to: ${to}`);
-  console.log(`SMTP Host: ${settings.host}:${settings.port}`);
+  console.log(`SMTP Host: ${settings.host}:${settings.port}, Encryption: ${settings.encryption}`);
+  
+  // denomailer tls config:
+  // true = direct SSL/TLS connection (port 465)
+  // false = plain connection, will auto-upgrade via STARTTLS if server supports it (port 587/25)
+  const useTls = settings.encryption === "ssl";
+  
+  console.log(`Using direct TLS: ${useTls}`);
   
   const client = new SMTPClient({
     connection: {
       hostname: settings.host,
       port: settings.port,
-      tls: settings.encryption === "ssl",
+      tls: useTls,
       auth: {
         username: settings.username,
         password: settings.password,
@@ -136,12 +143,65 @@ async function sendEmailViaSMTP(
 
     await client.close();
     console.log(`Email sent successfully via SMTP to ${to}`);
-    return { success: true };
+    return { success: true, method: 'smtp' };
   } catch (error: any) {
     console.error("SMTP send error:", error);
-    await client.close();
+    try { await client.close(); } catch (e) { /* ignore close errors */ }
     throw error;
   }
+}
+
+async function sendEmailViaResend(
+  settings: any,
+  to: string,
+  subject: string,
+  html: string
+): Promise<{ success: boolean; id?: string; method: string }> {
+  const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+  if (!RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY not configured");
+  }
+  
+  console.log("Using Resend API for email delivery");
+  
+  // Use Resend's default domain for public domains
+  const publicDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com'];
+  const emailDomain = settings.from_email?.split('@')[1]?.toLowerCase() || '';
+  const isPublicDomain = publicDomains.includes(emailDomain);
+  
+  const fromEmail = isPublicDomain 
+    ? `${settings.from_name || 'Notifications'} <onboarding@resend.dev>` 
+    : `${settings.from_name || 'Notifications'} <${settings.from_email}>`;
+  
+  console.log(`From: ${fromEmail}`);
+  if (isPublicDomain) {
+    console.log(`Note: Using Resend default sender. Add your domain at https://resend.com/domains for custom sender.`);
+  }
+  
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: fromEmail,
+      to: [to],
+      subject: subject,
+      html: html,
+      reply_to: settings.from_email,
+    }),
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`Resend API error (${response.status}):`, errorText);
+    throw new Error(`Resend API error: ${errorText}`);
+  }
+  
+  const result = await response.json();
+  console.log(`Email sent via Resend, ID: ${result.id}`);
+  return { success: true, id: result.id, method: 'resend' };
 }
 
 async function sendEmail(
@@ -153,72 +213,38 @@ async function sendEmail(
   action: string,
   metadata: any = {}
 ) {
-  console.log(`Sending email to: ${to}`);
+  console.log(`=== Sending email ===`);
+  console.log(`To: ${to}`);
   console.log(`Subject: ${subject}`);
+  console.log(`Action: ${action}`);
   
   const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-  
-  // Check if SMTP is fully configured (has host, username, password)
   const hasFullSMTP = settings.host && settings.username && settings.password;
   
+  console.log(`RESEND_API_KEY available: ${!!RESEND_API_KEY}`);
+  console.log(`Full SMTP configured: ${hasFullSMTP}`);
+  
   try {
-    // Priority 1: Use direct SMTP if fully configured
-    if (hasFullSMTP) {
-      console.log("Using direct SMTP for email delivery");
-      const result = await sendEmailViaSMTP(settings, to, subject, html);
-      await logEmail(supabase, action, to, subject, 'sent', null, { ...metadata, method: 'smtp' });
+    // Priority 1: Use Resend API (more reliable from edge functions)
+    if (RESEND_API_KEY) {
+      const result = await sendEmailViaResend(settings, to, subject, html);
+      await logEmail(supabase, action, to, subject, 'sent', null, { ...metadata, ...result });
       return result;
     }
     
-    // Priority 2: Use Resend API if available
-    if (RESEND_API_KEY) {
-      console.log("Using Resend API for email delivery");
-      
-      // Use Resend's default domain for testing, or a verified custom domain if configured
-      const publicDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com'];
-      const emailDomain = settings.from_email.split('@')[1]?.toLowerCase();
-      const isPublicDomain = publicDomains.includes(emailDomain);
-      
-      const fromEmail = isPublicDomain 
-        ? `${settings.from_name} <onboarding@resend.dev>` 
-        : `${settings.from_name} <${settings.from_email}>`;
-      
-      console.log(`From: ${fromEmail}`);
-      if (isPublicDomain) {
-        console.log(`Note: Using Resend default sender. Add your domain at https://resend.com/domains for custom sender.`);
-      }
-      
-      const response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${RESEND_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: fromEmail,
-          to: [to],
-          subject: subject,
-          html: html,
-          reply_to: settings.from_email,
-        }),
-      });
-      
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Failed to send email: ${error}`);
-      }
-      
-      const result = await response.json();
-      await logEmail(supabase, action, to, subject, 'sent', null, { ...metadata, resendId: result.id, method: 'resend' });
+    // Priority 2: Use direct SMTP if configured
+    if (hasFullSMTP) {
+      const result = await sendEmailViaSMTP(settings, to, subject, html);
+      await logEmail(supabase, action, to, subject, 'sent', null, { ...metadata, ...result });
       return result;
     }
     
     // Fallback: Log the email (useful for development)
-    console.log("Email would be sent (no SMTP or Resend configured):");
-    console.log({ to, subject, html: html.substring(0, 200) + "..." });
+    console.log("Email simulated (no SMTP or Resend configured):");
+    console.log({ to, subject, htmlPreview: html.substring(0, 200) + "..." });
     
     await logEmail(supabase, action, to, subject, 'simulated', null, { ...metadata, method: 'simulated' });
-    return { success: true, message: "Email logged (configure SMTP or RESEND_API_KEY for actual sending)" };
+    return { success: true, method: 'simulated', message: "Email logged (configure RESEND_API_KEY or SMTP for actual sending)" };
   } catch (error: any) {
     console.error("Email send error:", error);
     await logEmail(supabase, action, to, subject, 'failed', error.message, metadata);

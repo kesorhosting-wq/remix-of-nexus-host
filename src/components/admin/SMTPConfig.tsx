@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Mail, Save, Loader2, TestTube, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Mail, Save, Loader2, TestTube, CheckCircle2, AlertCircle, Send } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 
@@ -26,9 +26,10 @@ const SMTPConfig = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [testEmail, setTestEmail] = useState('');
   const [settings, setSettings] = useState<SMTPSettings>({
     id: '',
-    host: 'smtp.gmail.com',
+    host: '',
     port: 587,
     username: '',
     password: '',
@@ -52,6 +53,7 @@ const SMTPConfig = () => {
       if (error && error.code !== 'PGRST116') throw error;
       if (data) {
         setSettings(data);
+        setTestEmail(data.from_email || '');
       }
     } catch (error: any) {
       console.error('Failed to fetch SMTP settings:', error);
@@ -80,19 +82,46 @@ const SMTPConfig = () => {
   };
 
   const handleTest = async () => {
+    if (!testEmail) {
+      toast({ title: 'Please enter a test email address', variant: 'destructive' });
+      return;
+    }
+    
     setTesting(true);
     try {
       const { data, error } = await supabase.functions.invoke('send-email', {
         body: { 
           action: 'test',
-          to: settings.from_email,
+          to: testEmail,
         }
       });
       
       if (error) throw error;
-      toast({ title: 'Test email sent', description: 'Check your inbox' });
+      
+      if (data?.skipped) {
+        toast({ 
+          title: 'Email notifications disabled', 
+          description: 'Enable email notifications first',
+          variant: 'destructive' 
+        });
+      } else if (data?.method === 'simulated') {
+        toast({ 
+          title: 'Email simulated (dev mode)', 
+          description: 'Configure SMTP or RESEND_API_KEY for actual sending' 
+        });
+      } else {
+        toast({ 
+          title: 'Test email sent!', 
+          description: `Check ${testEmail} inbox (method: ${data?.method || 'unknown'})` 
+        });
+      }
     } catch (error: any) {
-      toast({ title: 'Test failed', description: error.message, variant: 'destructive' });
+      console.error('Test email error:', error);
+      toast({ 
+        title: 'Test failed', 
+        description: error.message || 'Check console for details', 
+        variant: 'destructive' 
+      });
     } finally {
       setTesting(false);
     }
@@ -115,8 +144,8 @@ const SMTPConfig = () => {
               <Mail className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <CardTitle>SMTP Configuration</CardTitle>
-              <CardDescription>Configure email settings for notifications</CardDescription>
+              <CardTitle>Email Configuration</CardTitle>
+              <CardDescription>Configure email settings for notifications (uses Resend API or SMTP)</CardDescription>
             </div>
           </div>
         </CardHeader>
@@ -134,132 +163,168 @@ const SMTPConfig = () => {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* SMTP Host */}
-            <div className="space-y-2">
-              <Label>SMTP Host</Label>
-              <Input
-                placeholder="smtp.gmail.com"
-                value={settings.host}
-                onChange={(e) => setSettings({ ...settings, host: e.target.value })}
-              />
-            </div>
-
-            {/* SMTP Port */}
-            <div className="space-y-2">
-              <Label>SMTP Port</Label>
-              <Input
-                type="number"
-                placeholder="587"
-                value={settings.port}
-                onChange={(e) => setSettings({ ...settings, port: parseInt(e.target.value) || 587 })}
-              />
-            </div>
-
-            {/* Username */}
-            <div className="space-y-2">
-              <Label>Username</Label>
-              <Input
-                placeholder="your-email@gmail.com"
-                value={settings.username}
-                onChange={(e) => setSettings({ ...settings, username: e.target.value })}
-              />
-            </div>
-
-            {/* Password */}
-            <div className="space-y-2">
-              <Label>Password / App Password</Label>
-              <Input
-                type="password"
-                placeholder="••••••••"
-                value={settings.password}
-                onChange={(e) => setSettings({ ...settings, password: e.target.value })}
-              />
-            </div>
-
             {/* From Email */}
             <div className="space-y-2">
-              <Label>From Email</Label>
+              <Label>From Email *</Label>
               <Input
                 type="email"
                 placeholder="noreply@yourdomain.com"
                 value={settings.from_email}
                 onChange={(e) => setSettings({ ...settings, from_email: e.target.value })}
               />
+              <p className="text-xs text-muted-foreground">Required for all email methods</p>
             </div>
 
             {/* From Name */}
             <div className="space-y-2">
-              <Label>From Name</Label>
+              <Label>From Name *</Label>
               <Input
                 placeholder="Game Hosting"
                 value={settings.from_name}
                 onChange={(e) => setSettings({ ...settings, from_name: e.target.value })}
               />
             </div>
+          </div>
 
-            {/* Encryption */}
+          {/* SMTP Section (Optional) */}
+          <div className="p-4 rounded-lg border border-dashed space-y-4">
+            <div>
+              <Label className="text-base">SMTP Settings (Optional)</Label>
+              <p className="text-sm text-muted-foreground">Leave empty to use Resend API instead</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* SMTP Host */}
+              <div className="space-y-2">
+                <Label>SMTP Host</Label>
+                <Input
+                  placeholder="smtp.gmail.com"
+                  value={settings.host}
+                  onChange={(e) => setSettings({ ...settings, host: e.target.value })}
+                />
+              </div>
+
+              {/* SMTP Port */}
+              <div className="space-y-2">
+                <Label>SMTP Port</Label>
+                <Input
+                  type="number"
+                  placeholder="587"
+                  value={settings.port}
+                  onChange={(e) => setSettings({ ...settings, port: parseInt(e.target.value) || 587 })}
+                />
+              </div>
+
+              {/* Username */}
+              <div className="space-y-2">
+                <Label>Username</Label>
+                <Input
+                  placeholder="your-email@gmail.com"
+                  value={settings.username}
+                  onChange={(e) => setSettings({ ...settings, username: e.target.value })}
+                />
+              </div>
+
+              {/* Password */}
+              <div className="space-y-2">
+                <Label>Password / App Password</Label>
+                <Input
+                  type="password"
+                  placeholder="••••••••"
+                  value={settings.password}
+                  onChange={(e) => setSettings({ ...settings, password: e.target.value })}
+                />
+              </div>
+
+              {/* Encryption */}
+              <div className="space-y-2">
+                <Label>Encryption</Label>
+                <Select
+                  value={settings.encryption}
+                  onValueChange={(value) => setSettings({ ...settings, encryption: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tls">STARTTLS (Port 587)</SelectItem>
+                    <SelectItem value="ssl">SSL/TLS (Port 465)</SelectItem>
+                    <SelectItem value="none">None (Port 25)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Quick Presets */}
             <div className="space-y-2">
-              <Label>Encryption</Label>
-              <Select
-                value={settings.encryption}
-                onValueChange={(value) => setSettings({ ...settings, encryption: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="tls">TLS</SelectItem>
-                  <SelectItem value="ssl">SSL</SelectItem>
-                  <SelectItem value="none">None</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label>Quick Presets</Label>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSettings({ ...settings, host: 'smtp.gmail.com', port: 587, encryption: 'tls' })}
+                >
+                  Gmail
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSettings({ ...settings, host: 'smtp.office365.com', port: 587, encryption: 'tls' })}
+                >
+                  Outlook
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSettings({ ...settings, host: 'smtp.sendgrid.net', port: 587, encryption: 'tls' })}
+                >
+                  SendGrid
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSettings({ ...settings, host: 'smtp.mailgun.org', port: 587, encryption: 'tls' })}
+                >
+                  Mailgun
+                </Button>
+              </div>
             </div>
           </div>
 
-          {/* Common Presets */}
-          <div className="space-y-2">
-            <Label>Quick Presets</Label>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSettings({ ...settings, host: 'smtp.gmail.com', port: 587, encryption: 'tls' })}
+          {/* Test Email Section */}
+          <div className="p-4 rounded-lg bg-primary/5 border border-primary/20 space-y-3">
+            <Label className="text-base flex items-center gap-2">
+              <Send className="w-4 h-4" />
+              Send Test Email
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                type="email"
+                placeholder="admin@example.com"
+                value={testEmail}
+                onChange={(e) => setTestEmail(e.target.value)}
+                className="flex-1"
+              />
+              <Button 
+                variant="outline" 
+                onClick={handleTest} 
+                disabled={testing || !settings.enabled || !testEmail} 
+                className="gap-2"
               >
-                Gmail
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSettings({ ...settings, host: 'smtp.office365.com', port: 587, encryption: 'tls' })}
-              >
-                Outlook
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSettings({ ...settings, host: 'smtp.sendgrid.net', port: 587, encryption: 'tls' })}
-              >
-                SendGrid
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSettings({ ...settings, host: 'smtp.mailgun.org', port: 587, encryption: 'tls' })}
-              >
-                Mailgun
+                {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
+                Send Test
               </Button>
             </div>
+            {!settings.enabled && (
+              <p className="text-xs text-muted-foreground">Enable email notifications first</p>
+            )}
           </div>
 
-          {/* Actions */}
+          {/* Save Button */}
           <div className="flex gap-3 pt-4">
             <Button onClick={handleSave} disabled={saving} className="gap-2">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save Settings
-            </Button>
-            <Button variant="outline" onClick={handleTest} disabled={testing || !settings.enabled} className="gap-2">
-              {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
-              Send Test Email
             </Button>
           </div>
         </CardContent>
@@ -288,10 +353,17 @@ const SMTPConfig = () => {
               </div>
             </div>
             <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
+              <CheckCircle2 className="w-5 h-5 text-green-500" />
+              <div>
+                <p className="font-medium">Panel Credentials</p>
+                <p className="text-sm text-muted-foreground">Sent with login details for game panel</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
               <AlertCircle className="w-5 h-5 text-yellow-500" />
               <div>
-                <p className="font-medium">Renewal Reminder</p>
-                <p className="text-sm text-muted-foreground">Sent before service expires</p>
+                <p className="font-medium">Renewal Reminder (25 days)</p>
+                <p className="text-sm text-muted-foreground">Warning before service auto-suspends at 30 days</p>
               </div>
             </div>
           </div>

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
@@ -13,7 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 const Cart = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { items, removeFromCart, addToCart, getTotal, itemCount } = useCart();
+  const { items, removeFromCart, updateQuantity, getTotal, itemCount } = useCart();
   const { user, loading: authLoading } = useAuth();
 
   const handleProceedToCheckout = () => {
@@ -37,22 +36,6 @@ const Cart = () => {
     }
 
     navigate("/checkout");
-  };
-
-  const handleAddMore = (item: typeof items[0]) => {
-    addToCart({
-      id: `${item.gameId}-${item.planId}-${Date.now()}`,
-      planId: item.planId,
-      gameId: item.gameId,
-      gameName: item.gameName,
-      gameIcon: item.gameIcon,
-      planName: item.planName,
-      price: item.price,
-      ram: item.ram,
-      cpu: item.cpu,
-      storage: item.storage,
-      slots: item.slots,
-    });
   };
 
   if (authLoading) {
@@ -128,15 +111,23 @@ const Cart = () => {
                         </div>
                         <div className="mt-4 flex items-center justify-between">
                           <span className="text-xl font-bold text-primary">
-                            ${item.price.toFixed(2)}/mo
+                            ${(item.price * item.quantity).toFixed(2)}/mo
                           </span>
                           <div className="flex items-center gap-2">
-                            <span className="text-sm text-muted-foreground">Qty: {item.quantity}</span>
                             <Button
                               variant="outline"
                               size="icon"
                               className="h-8 w-8"
-                              onClick={() => handleAddMore(item)}
+                              onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                            >
+                              <Minus className="w-4 h-4" />
+                            </Button>
+                            <span className="w-8 text-center font-medium">{item.quantity}</span>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => updateQuantity(item.id, item.quantity + 1)}
                             >
                               <Plus className="w-4 h-4" />
                             </Button>

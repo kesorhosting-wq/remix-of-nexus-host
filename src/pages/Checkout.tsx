@@ -324,20 +324,20 @@ const Checkout = () => {
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
-      <main className="container mx-auto px-4 py-24">
+      <main className="container mx-auto px-4 py-20 sm:py-24">
         <Button
           variant="ghost"
-          className="mb-6 gap-2"
+          className="mb-4 sm:mb-6 gap-2"
           onClick={() => navigate("/cart")}
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Cart
         </Button>
 
-        <h1 className="font-display text-3xl font-bold mb-8 flex items-center gap-3">
-          <CreditCard className="w-8 h-8 text-primary" />
+        <h1 className="font-display text-2xl sm:text-3xl font-bold mb-6 sm:mb-8 flex flex-wrap items-center gap-2 sm:gap-3">
+          <CreditCard className="w-6 h-6 sm:w-8 sm:h-8 text-primary" />
           Checkout
-          <span className="text-sm font-normal text-muted-foreground">
+          <span className="text-xs sm:text-sm font-normal text-muted-foreground">
             ({itemCount} {itemCount === 1 ? "server" : "servers"})
           </span>
         </h1>
@@ -356,7 +356,7 @@ const Checkout = () => {
             />
           </div>
         ) : (
-          <div className="grid lg:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
             {/* Server Configuration */}
             <div className="space-y-4">
               <Card>
@@ -371,20 +371,24 @@ const Checkout = () => {
                   {items.map((item, index) => {
                     const config = planConfigs[item.planId];
                     return (
-                      <div key={item.id} className="space-y-4 p-4 rounded-lg bg-muted/50">
-                        <div className="flex items-center gap-3">
-                          <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center">
+                      <div key={item.id} className="space-y-4 p-3 sm:p-4 rounded-lg bg-muted/50">
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-muted flex items-center justify-center flex-shrink-0">
                             {item.gameIcon.startsWith("/") || item.gameIcon.startsWith("http") ? (
-                              <img src={item.gameIcon} alt={item.gameName} className="w-8 h-8 object-contain rounded" />
+                              <img src={item.gameIcon} alt={item.gameName} className="w-6 h-6 sm:w-8 sm:h-8 object-contain rounded" />
                             ) : (
-                              <span className="text-2xl">{item.gameIcon}</span>
+                              <span className="text-xl sm:text-2xl">{item.gameIcon}</span>
                             )}
                           </div>
-                          <div className="flex-1">
-                            <h3 className="font-semibold">{item.gameName}</h3>
-                            <p className="text-sm text-muted-foreground">{item.planName}</p>
+                          <div className="flex-1 w-full">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <h3 className="font-semibold text-sm sm:text-base">{item.gameName}</h3>
+                                <p className="text-xs sm:text-sm text-muted-foreground">{item.planName}</p>
+                              </div>
+                              <Badge variant="secondary" className="text-xs">${item.price.toFixed(2)}/mo</Badge>
+                            </div>
                           </div>
-                          <Badge variant="secondary">${item.price.toFixed(2)}/mo</Badge>
                         </div>
 
                         <div className="space-y-2">

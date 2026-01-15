@@ -137,6 +137,9 @@ const IkhodePaymentCard = ({
     toast({ title: "Payment received!", description: "Setting up your server..." });
 
     try {
+      // Wait 1 second before showing provisioning status
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
       // The webhook should have already updated everything, but we double-check
       const { data: invoice } = await supabase
         .from("invoices")
@@ -153,6 +156,8 @@ const IkhodePaymentCard = ({
         });
 
         if (!provisionError) {
+          // Wait 2 seconds before showing active status
+          await new Promise(resolve => setTimeout(resolve, 2000));
           toast({ title: "Server created!", description: "Your server is now active." });
         }
       }

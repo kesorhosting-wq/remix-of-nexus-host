@@ -49,12 +49,12 @@ const Cart = () => {
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
-      <main className="container mx-auto px-4 py-24">
-        <h1 className="font-display text-3xl font-bold mb-8 flex items-center gap-3">
-          <ShoppingCart className="w-8 h-8 text-primary" />
+      <main className="container mx-auto px-4 py-20 sm:py-24">
+        <h1 className="font-display text-2xl sm:text-3xl font-bold mb-6 sm:mb-8 flex flex-wrap items-center gap-2 sm:gap-3">
+          <ShoppingCart className="w-6 h-6 sm:w-8 sm:h-8 text-primary" />
           Shopping Cart
           {itemCount > 0 && (
-            <span className="text-sm font-normal text-muted-foreground">
+            <span className="text-xs sm:text-sm font-normal text-muted-foreground">
               ({itemCount} {itemCount === 1 ? "item" : "items"})
             </span>
           )}
@@ -74,43 +74,43 @@ const Cart = () => {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid lg:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8">
             {/* Cart Items */}
             <div className="lg:col-span-2 space-y-4">
               {items.map((item) => (
                 <Card key={item.id}>
-                  <CardContent className="p-6">
-                    <div className="flex items-start gap-4">
-                      <div className="w-16 h-16 rounded-xl bg-muted flex items-center justify-center">
+                  <CardContent className="p-4 sm:p-6">
+                    <div className="flex flex-col sm:flex-row items-start gap-4">
+                      <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-muted flex items-center justify-center flex-shrink-0">
                         {item.gameIcon.startsWith("/") || item.gameIcon.startsWith("http") ? (
-                          <img src={item.gameIcon} alt={item.gameName} className="w-12 h-12 object-contain rounded" />
+                          <img src={item.gameIcon} alt={item.gameName} className="w-10 h-10 sm:w-12 sm:h-12 object-contain rounded" />
                         ) : (
-                          <span className="text-3xl">{item.gameIcon}</span>
+                          <span className="text-2xl sm:text-3xl">{item.gameIcon}</span>
                         )}
                       </div>
-                      <div className="flex-1">
+                      <div className="flex-1 w-full">
                         <div className="flex justify-between items-start">
                           <div>
-                            <h3 className="font-semibold text-lg">{item.gameName}</h3>
-                            <p className="text-muted-foreground">{item.planName}</p>
+                            <h3 className="font-semibold text-base sm:text-lg">{item.gameName}</h3>
+                            <p className="text-sm text-muted-foreground">{item.planName}</p>
                           </div>
                           <Button
                             variant="ghost"
                             size="icon"
                             onClick={() => removeFromCart(item.id)}
-                            className="text-destructive hover:text-destructive"
+                            className="text-destructive hover:text-destructive h-8 w-8"
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>
                         </div>
-                        <div className="mt-2 text-sm text-muted-foreground grid grid-cols-2 gap-2">
+                        <div className="mt-2 text-xs sm:text-sm text-muted-foreground grid grid-cols-2 gap-1 sm:gap-2">
                           <span>{item.ram} RAM</span>
                           <span>{item.cpu}</span>
                           <span>{item.storage}</span>
                           <span>{item.slots}</span>
                         </div>
-                        <div className="mt-4 flex items-center justify-between">
-                          <span className="text-xl font-bold text-primary">
+                        <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                          <span className="text-lg sm:text-xl font-bold text-primary">
                             ${(item.price * item.quantity).toFixed(2)}/mo
                           </span>
                           <div className="flex items-center gap-2">

@@ -660,9 +660,10 @@ async function createServer(
     })
     .eq("id", orderId);
 
-  // Send email with panel credentials if this is a new panel user
-  if (panelCredentials) {
-    try {
+  // Send email with panel credentials or server setup notification
+  try {
+    if (panelCredentials) {
+      // New panel user - send credentials email
       console.log("Sending panel credentials email to:", userEmail);
       const emailResponse = await supabase.functions.invoke('send-email', {
         body: {
@@ -673,11 +674,27 @@ async function createServer(
           serverName: serverName,
         }
       });
-      console.log("Email sent:", emailResponse);
-    } catch (emailErr) {
-      console.error("Failed to send credentials email (non-blocking):", emailErr);
-      // Don't fail the server creation if email fails
+      console.log("Panel credentials email sent:", emailResponse);
+    } else {
+      // Existing user - send server setup complete email
+      console.log("Sending server setup complete email to:", userEmail);
+      const emailResponse = await supabase.functions.invoke('send-email', {
+        body: {
+          action: 'server-setup-complete',
+          orderId: orderId,
+          serverDetails: {
+            name: serverName,
+            ip: allocation.ip,
+            port: allocation.port,
+            panelUrl: apiUrl,
+          }
+        }
+      });
+      console.log("Server setup email sent:", emailResponse);
     }
+  } catch (emailErr) {
+    console.error("Failed to send email (non-blocking):", emailErr);
+    // Don't fail the server creation if email fails
   }
 
   return {

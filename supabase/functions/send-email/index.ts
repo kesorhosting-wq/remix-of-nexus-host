@@ -23,6 +23,14 @@ async function getAuthUser(req: Request): Promise<AuthResult | null> {
   if (!authHeader) return null;
 
   const token = authHeader.replace("Bearer ", "");
+  
+  // Check if this is a service role call (internal edge function to edge function)
+  // Service role key is used for internal calls between edge functions
+  if (token === SUPABASE_SERVICE_ROLE_KEY) {
+    console.log("Service role key detected - internal call authorized");
+    return { user: { id: "service-role" }, isAdmin: true };
+  }
+  
   const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const { data: { user }, error } = await anonClient.auth.getUser(token);
   
@@ -37,11 +45,11 @@ async function getAuthUser(req: Request): Promise<AuthResult | null> {
   return { user: { id: user.id, email: user.email }, isAdmin: !!isAdmin };
 }
 
-async function requireAdmin(req: Request): Promise<AuthResult> {
+async function requireAdminOrService(req: Request): Promise<AuthResult> {
   const auth = await getAuthUser(req);
   if (!auth) throw new Error("Unauthorized: No valid authentication token");
   if (!auth.isAdmin) throw new Error("Forbidden: Admin access required");
-  console.log(`Admin access granted for user: ${auth.user.id}`);
+  console.log(`Access granted for: ${auth.user.id}`);
   return auth;
 }
 
@@ -290,9 +298,9 @@ serve(async (req) => {
 
     console.log(`Email action: ${action}`);
 
-    // ADMIN ONLY: All email sending actions require admin privileges
+    // Admin or internal service call required for email sending
     // This prevents unauthorized users from sending emails to arbitrary addresses
-    await requireAdmin(req);
+    await requireAdminOrService(req);
 
     const settings = await getSMTPSettings(supabase);
     

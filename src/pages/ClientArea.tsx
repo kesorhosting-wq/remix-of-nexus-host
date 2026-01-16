@@ -455,6 +455,19 @@ const ClientArea = () => {
                                   {showCredentials === order.id ? 'Hide' : 'Show'} Credentials
                                 </Button>
                               )}
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={handleResetPassword}
+                                disabled={resettingPassword}
+                                title="Reset Panel Password"
+                              >
+                                {resettingPassword ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="w-4 h-4" />
+                                )}
+                              </Button>
                             </>
                           ) : order.status === 'provisioning' ? (
                             <Button variant="outline" size="sm" disabled>
@@ -522,9 +535,55 @@ const ClientArea = () => {
                               </div>
                             </div>
                           </div>
-                          <p className="text-xs text-muted-foreground mt-3">
-                            Use these credentials to log in to the game panel. You can change your password after logging in.
-                          </p>
+                          
+                          {/* Reset Password Option */}
+                          <div className="flex items-center justify-between mt-4 pt-3 border-t">
+                            <p className="text-xs text-muted-foreground">
+                              Forgot or need to change your password?
+                            </p>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={handleResetPassword}
+                              disabled={resettingPassword}
+                            >
+                              {resettingPassword ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                                  Resetting...
+                                </>
+                              ) : (
+                                <>
+                                  <RefreshCw className="w-3 h-3 mr-1" />
+                                  Reset Password
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                          
+                          {/* Show new credentials if just reset */}
+                          {newCredentials && (
+                            <div className="mt-3 p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                              <p className="text-sm font-medium text-green-600 dark:text-green-400 flex items-center gap-1">
+                                <CheckCircle2 className="w-4 h-4" />
+                                Password Reset Successfully!
+                              </p>
+                              <div className="flex items-center justify-between mt-2">
+                                <span className="text-xs text-muted-foreground">New Password:</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-sm font-bold">{newCredentials.password}</span>
+                                  <Button 
+                                    size="sm" 
+                                    variant="ghost" 
+                                    className="h-6 w-6 p-0"
+                                    onClick={() => copyToClipboard(newCredentials.password, 'New Password')}
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </CardContent>

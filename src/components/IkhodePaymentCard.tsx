@@ -139,27 +139,34 @@ const IkhodePaymentCard = ({
     try {
       // Wait 1 second before showing provisioning status
       await new Promise(resolve => setTimeout(resolve, 1000));
+      setPaymentStatus("provisioning");
       
-      // The webhook should have already updated everything, but we double-check
-      const { data: invoice } = await supabase
-        .from("invoices")
-        .select("*, orders(*)")
-        .eq("id", invoiceId)
-        .single();
-
-      if (invoice?.order_id) {
-        setPaymentStatus("provisioning");
+      // Poll for order status to become "active" (webhook handles server creation)
+      let attempts = 0;
+      const maxAttempts = 30; // 30 attempts x 2 seconds = 60 seconds max wait
+      
+      const pollForActive = async (): Promise<boolean> => {
+        const { data: invoice } = await supabase
+          .from("invoices")
+          .select("*, orders(*)")
+          .eq("id", invoiceId)
+          .single();
         
-        // Trigger server provisioning
-        const { error: provisionError } = await supabase.functions.invoke("pterodactyl", {
-          body: { action: "create", orderId: invoice.order_id, serverDetails: invoice.orders?.server_details },
-        });
-
-        if (!provisionError) {
-          // Wait 2 seconds before showing active status
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          toast({ title: "Server created!", description: "Your server is now active." });
+        if (invoice?.orders?.status === "active") {
+          return true;
         }
+        return false;
+      };
+
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const isActive = await pollForActive();
+        
+        if (isActive) {
+          toast({ title: "Server created!", description: "Your server is now active." });
+          break;
+        }
+        attempts++;
       }
 
       setPaymentStatus("active");
@@ -168,6 +175,10 @@ const IkhodePaymentCard = ({
       setTimeout(() => navigate("/client"), 2000);
     } catch (error) {
       console.error("Post-payment error:", error);
+      // Still redirect even on error - webhook should have handled it
+      setPaymentStatus("active");
+      onComplete?.();
+      setTimeout(() => navigate("/client"), 2000);
     }
   };
 

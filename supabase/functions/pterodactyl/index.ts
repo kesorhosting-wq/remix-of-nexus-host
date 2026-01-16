@@ -198,12 +198,29 @@ serve(async (req) => {
         
         // Use background task for server creation to avoid timeout
         const createPromise = createServer(config.apiUrl, apiHeaders, validatedOrderId, serverDetails, supabase)
-          .catch(err => {
+          .catch(async (err) => {
             console.error("Background server creation failed:", err);
-            supabase.from("orders").update({ 
+            
+            // Update order status to failed
+            await supabase.from("orders").update({ 
               status: "failed",
               notes: `Server creation failed: ${err.message}`
             }).eq("id", validatedOrderId);
+            
+            // Send provisioning failure email to admin
+            try {
+              console.log("Sending provisioning failure notification to admin...");
+              await supabase.functions.invoke('send-email', {
+                body: {
+                  action: 'provisioning-failed',
+                  orderId: validatedOrderId,
+                  errorMessage: err.message,
+                }
+              });
+              console.log("Provisioning failure email sent");
+            } catch (emailErr) {
+              console.error("Failed to send provisioning failure email:", emailErr);
+            }
           });
         
         // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions

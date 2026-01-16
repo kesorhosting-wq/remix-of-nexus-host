@@ -60,7 +60,7 @@ const ALLOWED_ACTIONS = [
   "server-setup-complete", "renewal-reminder", "service-suspended",
   "service-terminated", "service-reactivated", "panel-credentials",
   "panel-password-reset", "server-suspended-overdue", "payment-reminder",
-  "server-age-warning", "sync-welcome"
+  "server-age-warning", "sync-welcome", "provisioning-failed"
 ] as const;
 
 function validateAction(action: unknown): typeof ALLOWED_ACTIONS[number] {
@@ -588,6 +588,79 @@ serve(async (req) => {
         );
         
         return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "provisioning-failed": {
+        const { errorMessage } = body;
+        const validatedOrderId = orderId ? validateUUID(orderId, "orderId") : null;
+        
+        // Get order details
+        let orderInfo: any = null;
+        let userEmail = "";
+        
+        if (validatedOrderId) {
+          const { data: order } = await supabase
+            .from("orders")
+            .select("*, products(name)")
+            .eq("id", validatedOrderId)
+            .single();
+          orderInfo = order;
+          
+          if (order) {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("email")
+              .eq("user_id", order.user_id)
+              .single();
+            userEmail = profile?.email || "";
+          }
+        }
+        
+        // Get all admin emails
+        const { data: adminRoles } = await supabase
+          .from("user_roles")
+          .select("user_id")
+          .eq("role", "admin");
+        
+        const adminUserIds = (adminRoles || []).map((r: any) => r.user_id);
+        
+        const { data: adminProfiles } = await supabase
+          .from("profiles")
+          .select("email")
+          .in("user_id", adminUserIds);
+        
+        const adminEmails = (adminProfiles || []).map((p: any) => p.email).filter(Boolean);
+        
+        if (adminEmails.length === 0) {
+          console.log("No admin emails found for provisioning failure notification");
+          return new Response(JSON.stringify({ success: true, skipped: true, message: "No admin emails configured" }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        
+        const html = generateProvisioningFailedEmail(orderInfo, userEmail, errorMessage, settings.from_name);
+        
+        // Send to all admins
+        for (const adminEmail of adminEmails) {
+          try {
+            await sendEmail(
+              settings,
+              adminEmail,
+              `🚨 Server Provisioning Failed - Order #${validatedOrderId?.slice(0, 8) || 'Unknown'}`,
+              html,
+              supabase,
+              action,
+              { orderId: validatedOrderId, errorMessage }
+            );
+            console.log(`Provisioning failure email sent to admin: ${adminEmail}`);
+          } catch (err) {
+            console.error(`Failed to send to admin ${adminEmail}:`, err);
+          }
+        }
+        
+        return new Response(JSON.stringify({ success: true, adminNotified: adminEmails.length }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
@@ -1644,6 +1717,110 @@ function generateSyncWelcomeEmail(
           </p>
           <p style="color: #475569; font-size: 12px; margin: 10px 0 0 0;">
             Questions? Contact our support team anytime.
+          </p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+function generateProvisioningFailedEmail(order: any, userEmail: string, errorMessage: string, brandName: string): string {
+  const orderIdShort = order?.id?.slice(0, 8) || 'Unknown';
+  const serverDetails = order?.server_details || {};
+  
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #1a1a1a;">
+      <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); padding: 40px; border-radius: 16px 16px 0 0; text-align: center;">
+          <div style="width: 80px; height: 80px; background: rgba(255,255,255,0.2); border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+            <span style="font-size: 40px;">🚨</span>
+          </div>
+          <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Server Provisioning Failed</h1>
+          <p style="color: rgba(255,255,255,0.8); margin: 10px 0 0 0; font-size: 16px;">Immediate Admin Attention Required</p>
+        </div>
+        
+        <!-- Main Content -->
+        <div style="background: #2d2d2d; padding: 40px; border-radius: 0 0 16px 16px;">
+          
+          <p style="color: #e5e7eb; font-size: 16px; line-height: 1.6;">
+            A server provisioning attempt has failed and requires manual investigation.
+          </p>
+          
+          <!-- Error Box -->
+          <div style="background: #451a03; border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #dc2626;">
+            <h3 style="margin: 0 0 12px 0; color: #fca5a5; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">❌ Error Message</h3>
+            <p style="margin: 0; color: #fef2f2; font-family: 'Monaco', monospace; font-size: 14px; word-break: break-word; white-space: pre-wrap;">${errorMessage || 'Unknown error occurred'}</p>
+          </div>
+          
+          <!-- Order Details -->
+          <div style="background: #374151; border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #4b5563;">
+            <h3 style="margin: 0 0 16px 0; color: #d1d5db; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">📋 Order Information</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 10px 0; color: #9ca3af; font-size: 14px;">Order ID</td>
+                <td style="padding: 10px 0; text-align: right; color: #ffffff; font-family: monospace; font-size: 14px;">${order?.id || 'N/A'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 0; color: #9ca3af; font-size: 14px;">Customer Email</td>
+                <td style="padding: 10px 0; text-align: right; color: #60a5fa; font-size: 14px;">${userEmail || 'Unknown'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 0; color: #9ca3af; font-size: 14px;">Server Name</td>
+                <td style="padding: 10px 0; text-align: right; color: #ffffff; font-size: 14px;">${serverDetails.name || serverDetails.server_name || 'N/A'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 0; color: #9ca3af; font-size: 14px;">Plan</td>
+                <td style="padding: 10px 0; text-align: right; color: #ffffff; font-size: 14px;">${serverDetails.plan_name || order?.products?.name || 'N/A'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 0; color: #9ca3af; font-size: 14px;">Price</td>
+                <td style="padding: 10px 0; text-align: right; color: #22c55e; font-size: 14px;">$${order?.price?.toFixed(2) || '0.00'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 0; color: #9ca3af; font-size: 14px;">Order Status</td>
+                <td style="padding: 10px 0; text-align: right; color: #ef4444; font-weight: 600; font-size: 14px; text-transform: uppercase;">${order?.status || 'failed'}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <!-- Technical Details if available -->
+          ${serverDetails.nest_id || serverDetails.egg_id ? `
+          <div style="background: #1f2937; border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #374151;">
+            <h3 style="margin: 0 0 16px 0; color: #d1d5db; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">🔧 Technical Details</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              ${serverDetails.nest_id ? `<tr><td style="padding: 6px 0; color: #9ca3af; font-size: 13px;">Nest ID</td><td style="text-align: right; color: #e5e7eb; font-family: monospace;">${serverDetails.nest_id}</td></tr>` : ''}
+              ${serverDetails.egg_id ? `<tr><td style="padding: 6px 0; color: #9ca3af; font-size: 13px;">Egg ID</td><td style="text-align: right; color: #e5e7eb; font-family: monospace;">${serverDetails.egg_id}</td></tr>` : ''}
+              ${serverDetails.node_id ? `<tr><td style="padding: 6px 0; color: #9ca3af; font-size: 13px;">Node ID</td><td style="text-align: right; color: #e5e7eb; font-family: monospace;">${serverDetails.node_id}</td></tr>` : ''}
+            </table>
+          </div>
+          ` : ''}
+          
+          <!-- Action Required -->
+          <div style="background: #fef3c7; border-radius: 12px; padding: 20px; margin: 24px 0; border-left: 4px solid #f59e0b;">
+            <p style="margin: 0; color: #92400e; font-size: 15px; line-height: 1.6;">
+              <strong>⚡ Action Required:</strong> Please check the Pterodactyl panel and edge function logs to diagnose the issue, then manually provision the server or contact the customer.
+            </p>
+          </div>
+          
+          <!-- Timestamp -->
+          <p style="color: #6b7280; font-size: 13px; margin-top: 30px; text-align: center;">
+            Failed at: ${new Date().toISOString()}
+          </p>
+        </div>
+        
+        <!-- Footer -->
+        <div style="text-align: center; margin-top: 20px;">
+          <p style="color: #6b7280; font-size: 13px; margin: 0;">
+            ${brandName} • Admin Notification System
           </p>
         </div>
       </div>

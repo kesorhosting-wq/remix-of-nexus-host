@@ -168,6 +168,28 @@ const AdminDashboard = () => {
     }
   }, [user, authLoading, isAdmin]);
 
+  useEffect(() => {
+    if (!user || !isAdmin) return;
+
+    const channel = supabase
+      .channel("admin-orders-live")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "orders" },
+        (payload) => {
+          const updated = payload.new as Order;
+          setOrders((prev) =>
+            prev.map((order) => (order.id === updated.id ? { ...order, ...updated } : order))
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, isAdmin]);
+
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -270,18 +292,34 @@ const AdminDashboard = () => {
     setTempPrice(0);
   };
 
+  const sanitizeLogPayload = (payload: any) => {
+    if (payload instanceof Error) {
+      return { message: payload.message, stack: payload.stack };
+    }
+    try {
+      return JSON.parse(JSON.stringify(payload));
+    } catch (error: any) {
+      return { message: error?.message || "Unable to serialize payload" };
+    }
+  };
+
   const appendProvisionLog = async (
     order: Order,
     entry: { status: "success" | "failed"; message: string; request?: any; response?: any }
   ) => {
     try {
+      const safeEntry = {
+        ...entry,
+        request: sanitizeLogPayload(entry.request),
+        response: sanitizeLogPayload(entry.response),
+      };
       const existingLogs = order.server_details?.provisioning_logs || [];
       const updatedDetails = {
         ...(order.server_details || {}),
         provisioning_logs: [
           ...existingLogs,
           {
-            ...entry,
+            ...safeEntry,
             at: new Date().toISOString(),
           },
         ],

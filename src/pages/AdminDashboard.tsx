@@ -293,6 +293,14 @@ const AdminDashboard = () => {
         .eq("id", order.id);
 
       if (error) throw error;
+
+      setOrders((prev) =>
+        prev.map((existing) =>
+          existing.id === order.id
+            ? { ...existing, server_details: updatedDetails }
+            : existing
+        )
+      );
     } catch (error) {
       console.error("Failed to append provisioning log:", error);
     }
@@ -1182,15 +1190,13 @@ const AdminDashboard = () => {
                                 )}
                               </Button>
                             )}
-                            {order.server_details?.provisioning_logs?.length > 0 && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => setLogOrder(order)}
-                              >
-                                Logs
-                              </Button>
-                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setLogOrder(order)}
+                            >
+                              Logs
+                            </Button>
                             <AlertDialog>
                               <AlertDialogTrigger asChild>
                                 <Button
@@ -1873,43 +1879,46 @@ const AdminDashboard = () => {
                       <TableHead>Customer</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Last Update</TableHead>
+                      <TableHead>Logs</TableHead>
                       <TableHead>Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {orders.filter((order) => order.server_details?.provisioning_logs?.length > 0).length === 0 ? (
+                    {orders.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                          No provisioning logs yet.
+                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                          No orders available.
                         </TableCell>
                       </TableRow>
                     ) : (
-                      orders
-                        .filter((order) => order.server_details?.provisioning_logs?.length > 0)
-                        .map((order) => {
-                          const lastLog = order.server_details?.provisioning_logs?.[order.server_details.provisioning_logs.length - 1];
-                          return (
-                            <TableRow key={order.id}>
-                              <TableCell className="font-mono text-xs">{order.id.slice(0, 8)}</TableCell>
-                              <TableCell>{order.user_email || "N/A"}</TableCell>
-                              <TableCell>
-                                {lastLog?.status ? (
-                                  <Badge className={statusColors[lastLog.status] || ""}>{lastLog.status}</Badge>
-                                ) : (
-                                  <Badge variant="outline">unknown</Badge>
-                                )}
-                              </TableCell>
-                              <TableCell className="text-xs text-muted-foreground">
-                                {lastLog?.at ? format(new Date(lastLog.at), "PPpp") : "-"}
-                              </TableCell>
-                              <TableCell>
-                                <Button size="sm" variant="outline" onClick={() => setLogOrder(order)}>
-                                  View Logs
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })
+                      orders.map((order) => {
+                        const logs = order.server_details?.provisioning_logs || [];
+                        const lastLog = logs[logs.length - 1];
+                        return (
+                          <TableRow key={order.id}>
+                            <TableCell className="font-mono text-xs">{order.id.slice(0, 8)}</TableCell>
+                            <TableCell>{order.user_email || "N/A"}</TableCell>
+                            <TableCell>
+                              {lastLog?.status ? (
+                                <Badge className={statusColors[lastLog.status] || ""}>{lastLog.status}</Badge>
+                              ) : (
+                                <Badge variant="outline">none</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {lastLog?.at ? format(new Date(lastLog.at), "PPpp") : "-"}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {logs.length}
+                            </TableCell>
+                            <TableCell>
+                              <Button size="sm" variant="outline" onClick={() => setLogOrder(order)}>
+                                View Logs
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
                     )}
                   </TableBody>
                 </Table>

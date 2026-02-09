@@ -272,13 +272,9 @@ const AdminDashboard = () => {
 
   const appendProvisionLog = async (
     order: Order,
-    entry: { status: "started" | "success" | "failed"; message: string }
+    entry: { status: "success" | "failed"; message: string; request?: any; response?: any }
   ) => {
     try {
-      if (entry.status !== "failed") {
-        return;
-      }
-
       const existingLogs = order.server_details?.provisioning_logs || [];
       const updatedDetails = {
         ...(order.server_details || {}),
@@ -309,16 +305,25 @@ const AdminDashboard = () => {
     }
 
     setProvisioningOrder(order.id);
+    const requestPayload = {
+      action: "create",
+      orderId: order.id,
+      serverDetails: order.server_details,
+    };
+
     try {
       const { data, error } = await supabase.functions.invoke("pterodactyl", {
-        body: {
-          action: "create",
-          orderId: order.id,
-          serverDetails: order.server_details,
-        },
+        body: requestPayload,
       });
 
       if (error) throw error;
+
+      await appendProvisionLog(order, {
+        status: "success",
+        message: "Server provisioned successfully.",
+        request: requestPayload,
+        response: data,
+      });
 
       toast({ title: "Server provisioned successfully!" });
       fetchData();
@@ -327,6 +332,8 @@ const AdminDashboard = () => {
       await appendProvisionLog(order, {
         status: "failed",
         message: error?.message || "Server provisioning failed.",
+        request: requestPayload,
+        response: error,
       });
       toast({ title: "Failed to provision server", description: error.message, variant: "destructive" });
     } finally {
@@ -674,12 +681,14 @@ const AdminDashboard = () => {
 
             // Trigger server creation
             try {
+              const requestPayload = {
+                action: "create",
+                orderId: order.id,
+                serverDetails: order.server_details,
+              };
+
               const { data, error: provisionError } = await supabase.functions.invoke("pterodactyl", {
-                body: {
-                  action: "create",
-                  orderId: order.id,
-                  serverDetails: order.server_details,
-                },
+                body: requestPayload,
               });
               
               if (provisionError) {
@@ -687,9 +696,17 @@ const AdminDashboard = () => {
                 await appendProvisionLog(order, {
                   status: "failed",
                   message: provisionError.message || "Server provisioning failed.",
+                  request: requestPayload,
+                  response: provisionError,
                 });
                 toast({ title: "Server provisioning started", description: "Check order status for updates" });
               } else {
+                await appendProvisionLog(order, {
+                  status: "success",
+                  message: "Server provisioned successfully.",
+                  request: requestPayload,
+                  response: data,
+                });
                 toast({ title: "Server provisioned successfully!" });
               }
               
@@ -706,6 +723,12 @@ const AdminDashboard = () => {
               await appendProvisionLog(order, {
                 status: "failed",
                 message: provErr?.message || "Server provisioning failed.",
+                request: {
+                  action: "create",
+                  orderId: order.id,
+                  serverDetails: order.server_details,
+                },
+                response: provErr,
               });
               toast({ title: "Server provisioning started in background" });
             }
@@ -1159,7 +1182,7 @@ const AdminDashboard = () => {
                                 )}
                               </Button>
                             )}
-                            {order.server_details?.provisioning_logs?.some((log: any) => log.status === "failed") && (
+                            {order.server_details?.provisioning_logs?.length > 0 && (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -1854,7 +1877,7 @@ const AdminDashboard = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {orders.filter((order) => order.server_details?.provisioning_logs?.some((log: any) => log.status === "failed")).length === 0 ? (
+                    {orders.filter((order) => order.server_details?.provisioning_logs?.length > 0).length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
                           No provisioning logs yet.
@@ -1862,10 +1885,9 @@ const AdminDashboard = () => {
                       </TableRow>
                     ) : (
                       orders
-                        .filter((order) => order.server_details?.provisioning_logs?.some((log: any) => log.status === "failed"))
+                        .filter((order) => order.server_details?.provisioning_logs?.length > 0)
                         .map((order) => {
-                          const failedLogs = order.server_details?.provisioning_logs?.filter((log: any) => log.status === "failed") || [];
-                          const lastLog = failedLogs[failedLogs.length - 1];
+                          const lastLog = order.server_details?.provisioning_logs?.[order.server_details.provisioning_logs.length - 1];
                           return (
                             <TableRow key={order.id}>
                               <TableCell className="font-mono text-xs">{order.id.slice(0, 8)}</TableCell>
@@ -1902,21 +1924,33 @@ const AdminDashboard = () => {
               <DialogTitle>Provisioning Logs</DialogTitle>
             </DialogHeader>
             <div className="space-y-3">
-              {logOrder?.server_details?.provisioning_logs
-                ?.filter((log: any) => log.status === "failed")
-                .map((log: any, index: number) => (
-                  <div key={`${log.at}-${index}`} className="border border-border rounded-lg p-3">
-                    <div className="flex items-center justify-between">
-                      <Badge className={statusColors[log.status] || ""}>{log.status}</Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {log.at ? format(new Date(log.at), "PPpp") : "Unknown time"}
-                      </span>
-                    </div>
-                    <p className="text-sm mt-2">{log.message}</p>
+              {logOrder?.server_details?.provisioning_logs?.map((log: any, index: number) => (
+                <div key={`${log.at}-${index}`} className="border border-border rounded-lg p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Badge className={statusColors[log.status] || ""}>{log.status}</Badge>
+                    <span className="text-xs text-muted-foreground">
+                      {log.at ? format(new Date(log.at), "PPpp") : "Unknown time"}
+                    </span>
                   </div>
-                ))}
+                  <p className="text-sm">{log.message}</p>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground mb-1">Request</p>
+                      <pre className="text-xs bg-muted/50 rounded p-2 overflow-x-auto">
+                        {JSON.stringify(log.request ?? {}, null, 2)}
+                      </pre>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground mb-1">Response</p>
+                      <pre className="text-xs bg-muted/50 rounded p-2 overflow-x-auto">
+                        {JSON.stringify(log.response ?? {}, null, 2)}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
+              ))}
               {(!logOrder?.server_details?.provisioning_logs ||
-                logOrder.server_details.provisioning_logs.filter((log: any) => log.status === "failed").length === 0) && (
+                logOrder.server_details.provisioning_logs.length === 0) && (
                 <p className="text-sm text-muted-foreground">No provisioning logs yet.</p>
               )}
             </div>

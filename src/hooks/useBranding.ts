@@ -69,7 +69,8 @@ export const useBranding = () => {
     try {
       const { error } = await supabase
         .from('branding_settings')
-        .update({
+        .upsert({
+          id: BRANDING_ID,
           site_name: brandData.name ?? brand.name,
           tagline: brandData.tagline ?? brand.tagline,
           logo_url: brandData.logoUrl ?? brand.logoUrl,
@@ -92,8 +93,7 @@ export const useBranding = () => {
           social_telegram: brandData.socialTelegram ?? brand.socialTelegram,
           social_youtube: brandData.socialYoutube ?? brand.socialYoutube,
           footer_description: brandData.footerDescription ?? brand.footerDescription,
-        })
-        .eq('id', BRANDING_ID);
+        });
 
       if (error) throw error;
 

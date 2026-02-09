@@ -151,6 +151,7 @@ const AdminDashboard = () => {
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [editingPrice, setEditingPrice] = useState<string | null>(null);
   const [tempPrice, setTempPrice] = useState<number>(0);
+  const [logOrder, setLogOrder] = useState<Order | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -269,6 +270,34 @@ const AdminDashboard = () => {
     setTempPrice(0);
   };
 
+  const appendProvisionLog = async (
+    order: Order,
+    entry: { status: "started" | "success" | "failed"; message: string }
+  ) => {
+    try {
+      const existingLogs = order.server_details?.provisioning_logs || [];
+      const updatedDetails = {
+        ...(order.server_details || {}),
+        provisioning_logs: [
+          ...existingLogs,
+          {
+            ...entry,
+            at: new Date().toISOString(),
+          },
+        ],
+      };
+
+      const { error } = await supabase
+        .from("orders")
+        .update({ server_details: updatedDetails })
+        .eq("id", order.id);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error("Failed to append provisioning log:", error);
+    }
+  };
+
   const handleProvisionServer = async (order: Order) => {
     if (order.status !== "paid" && order.status !== "active" && order.status !== "failed") {
       toast({ title: "Order must be paid first", variant: "destructive" });
@@ -277,6 +306,11 @@ const AdminDashboard = () => {
 
     setProvisioningOrder(order.id);
     try {
+      await appendProvisionLog(order, {
+        status: "started",
+        message: "Manual provisioning triggered from admin dashboard.",
+      });
+
       const { data, error } = await supabase.functions.invoke("pterodactyl", {
         body: {
           action: "create",
@@ -287,10 +321,19 @@ const AdminDashboard = () => {
 
       if (error) throw error;
 
+      await appendProvisionLog(order, {
+        status: "success",
+        message: `Server provisioning completed${data?.pterodactyl_identifier ? ` (${data.pterodactyl_identifier})` : ""}.`,
+      });
+
       toast({ title: "Server provisioned successfully!" });
       fetchData();
     } catch (error: any) {
       console.error("Provisioning error:", error);
+      await appendProvisionLog(order, {
+        status: "failed",
+        message: error?.message || "Server provisioning failed.",
+      });
       toast({ title: "Failed to provision server", description: error.message, variant: "destructive" });
     } finally {
       setProvisioningOrder(null);
@@ -634,6 +677,11 @@ const AdminDashboard = () => {
             
             // Update order status to paid first
             await supabase.from("orders").update({ status: "paid" }).eq("id", order.id);
+
+            await appendProvisionLog(order, {
+              status: "started",
+              message: "Auto provisioning triggered after invoice paid.",
+            });
             
             // Trigger server creation
             try {
@@ -647,8 +695,16 @@ const AdminDashboard = () => {
               
               if (provisionError) {
                 console.error("Server provisioning error:", provisionError);
+                await appendProvisionLog(order, {
+                  status: "failed",
+                  message: provisionError.message || "Server provisioning failed.",
+                });
                 toast({ title: "Server provisioning started", description: "Check order status for updates" });
               } else {
+                await appendProvisionLog(order, {
+                  status: "success",
+                  message: `Server provisioning completed${data?.pterodactyl_identifier ? ` (${data.pterodactyl_identifier})` : ""}.`,
+                });
                 toast({ title: "Server provisioned successfully!" });
               }
               
@@ -662,6 +718,10 @@ const AdminDashboard = () => {
               }
             } catch (provErr: any) {
               console.error("Provisioning error:", provErr);
+              await appendProvisionLog(order, {
+                status: "failed",
+                message: provErr?.message || "Server provisioning failed.",
+              });
               toast({ title: "Server provisioning started in background" });
             }
           }
@@ -1096,7 +1156,7 @@ const AdminDashboard = () => {
                                 <SelectItem value="cancelled">Cancelled</SelectItem>
                               </SelectContent>
                             </Select>
-                            {!order.server_id && (order.status === "paid" || order.status === "active" || order.status === "failed") && (
+                            {!order.server_id && (order.status === "active" || order.status === "failed") && (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -1108,6 +1168,15 @@ const AdminDashboard = () => {
                                 ) : (
                                   <Server className="w-4 h-4" />
                                 )}
+                              </Button>
+                            )}
+                            {order.server_details?.provisioning_logs?.length > 0 && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setLogOrder(order)}
+                              >
+                                Logs
                               </Button>
                             )}
                             <AlertDialog>
@@ -1770,6 +1839,30 @@ const AdminDashboard = () => {
           </TabsContent>
         </Tabs>
         
+        <Dialog open={!!logOrder} onOpenChange={(open) => !open && setLogOrder(null)}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Provisioning Logs</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              {logOrder?.server_details?.provisioning_logs?.map((log: any, index: number) => (
+                <div key={`${log.at}-${index}`} className="border border-border rounded-lg p-3">
+                  <div className="flex items-center justify-between">
+                    <Badge className={statusColors[log.status] || ""}>{log.status}</Badge>
+                    <span className="text-xs text-muted-foreground">
+                      {log.at ? format(new Date(log.at), "PPpp") : "Unknown time"}
+                    </span>
+                  </div>
+                  <p className="text-sm mt-2">{log.message}</p>
+                </div>
+              ))}
+              {(!logOrder?.server_details?.provisioning_logs || logOrder.server_details.provisioning_logs.length === 0) && (
+                <p className="text-sm text-muted-foreground">No provisioning logs yet.</p>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+
         {/* Sync Servers Dialog */}
         <SyncServersDialog 
           open={syncDialogOpen}

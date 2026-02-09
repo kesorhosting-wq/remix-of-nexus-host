@@ -344,6 +344,49 @@ const AdminDashboard = () => {
     }
   };
 
+  const parseSizeToMb = (value?: string | number | null) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number") return value;
+    const normalized = value.toString().toLowerCase().trim();
+    const numeric = Number(normalized.replace(/[^0-9.]/g, ""));
+    if (Number.isNaN(numeric) || numeric <= 0) return null;
+    if (normalized.includes("tb")) return Math.round(numeric * 1024 * 1024);
+    if (normalized.includes("gb") || normalized.includes("gib")) return Math.round(numeric * 1024);
+    if (normalized.includes("mb") || normalized.includes("mib")) return Math.round(numeric);
+    return Math.round(numeric);
+  };
+
+  const parseCpuPercent = (value?: string | number | null) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number") return value;
+    const normalized = value.toString().toLowerCase().trim();
+    const numeric = Number(normalized.replace(/[^0-9.]/g, ""));
+    if (Number.isNaN(numeric) || numeric <= 0) return null;
+    if (normalized.includes("%")) return Math.round(numeric);
+    if (normalized.includes("vcpu") || normalized.includes("core")) return Math.round(numeric * 100);
+    return Math.round(numeric);
+  };
+
+  const normalizeServerDetailsForProvision = (details: any) => {
+    if (!details) return details;
+    if (Array.isArray(details.items)) {
+      return {
+        ...details,
+        provisioning_logs: undefined,
+        items: details.items.map((item: any) => ({
+          ...item,
+          ram: parseSizeToMb(item.ram),
+          storage: parseSizeToMb(item.storage),
+          cpu: parseCpuPercent(item.cpu),
+        })),
+      };
+    }
+    return {
+      ...details,
+      provisioning_logs: undefined,
+    };
+  };
+
   const handleProvisionServer = async (order: Order) => {
     if (order.status !== "paid" && order.status !== "active" && order.status !== "failed") {
       toast({ title: "Order must be paid first", variant: "destructive" });
@@ -354,7 +397,7 @@ const AdminDashboard = () => {
     const requestPayload = {
       action: "create",
       orderId: order.id,
-      serverDetails: order.server_details,
+      serverDetails: normalizeServerDetailsForProvision(order.server_details),
     };
 
     try {
@@ -730,7 +773,7 @@ const AdminDashboard = () => {
               const requestPayload = {
                 action: "create",
                 orderId: order.id,
-                serverDetails: order.server_details,
+                serverDetails: normalizeServerDetailsForProvision(order.server_details),
               };
 
               const { data, error: provisionError } = await supabase.functions.invoke("pterodactyl", {
@@ -772,7 +815,7 @@ const AdminDashboard = () => {
                 request: {
                   action: "create",
                   orderId: order.id,
-                  serverDetails: order.server_details,
+                  serverDetails: normalizeServerDetailsForProvision(order.server_details),
                 },
                 response: provErr,
               });

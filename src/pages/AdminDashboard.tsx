@@ -275,6 +275,10 @@ const AdminDashboard = () => {
     entry: { status: "started" | "success" | "failed"; message: string }
   ) => {
     try {
+      if (entry.status !== "failed") {
+        return;
+      }
+
       const existingLogs = order.server_details?.provisioning_logs || [];
       const updatedDetails = {
         ...(order.server_details || {}),
@@ -306,11 +310,6 @@ const AdminDashboard = () => {
 
     setProvisioningOrder(order.id);
     try {
-      await appendProvisionLog(order, {
-        status: "started",
-        message: "Manual provisioning triggered from admin dashboard.",
-      });
-
       const { data, error } = await supabase.functions.invoke("pterodactyl", {
         body: {
           action: "create",
@@ -320,11 +319,6 @@ const AdminDashboard = () => {
       });
 
       if (error) throw error;
-
-      await appendProvisionLog(order, {
-        status: "success",
-        message: `Server provisioning completed${data?.pterodactyl_identifier ? ` (${data.pterodactyl_identifier})` : ""}.`,
-      });
 
       toast({ title: "Server provisioned successfully!" });
       fetchData();
@@ -678,11 +672,6 @@ const AdminDashboard = () => {
             // Update order status to paid first
             await supabase.from("orders").update({ status: "paid" }).eq("id", order.id);
 
-            await appendProvisionLog(order, {
-              status: "started",
-              message: "Auto provisioning triggered after invoice paid.",
-            });
-            
             // Trigger server creation
             try {
               const { data, error: provisionError } = await supabase.functions.invoke("pterodactyl", {
@@ -701,10 +690,6 @@ const AdminDashboard = () => {
                 });
                 toast({ title: "Server provisioning started", description: "Check order status for updates" });
               } else {
-                await appendProvisionLog(order, {
-                  status: "success",
-                  message: `Server provisioning completed${data?.pterodactyl_identifier ? ` (${data.pterodactyl_identifier})` : ""}.`,
-                });
                 toast({ title: "Server provisioned successfully!" });
               }
               
@@ -1174,7 +1159,7 @@ const AdminDashboard = () => {
                                 )}
                               </Button>
                             )}
-                            {order.server_details?.provisioning_logs?.length > 0 && (
+                            {order.server_details?.provisioning_logs?.some((log: any) => log.status === "failed") && (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -1869,7 +1854,7 @@ const AdminDashboard = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {orders.filter((order) => order.server_details?.provisioning_logs?.length > 0).length === 0 ? (
+                    {orders.filter((order) => order.server_details?.provisioning_logs?.some((log: any) => log.status === "failed")).length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
                           No provisioning logs yet.
@@ -1877,9 +1862,10 @@ const AdminDashboard = () => {
                       </TableRow>
                     ) : (
                       orders
-                        .filter((order) => order.server_details?.provisioning_logs?.length > 0)
+                        .filter((order) => order.server_details?.provisioning_logs?.some((log: any) => log.status === "failed"))
                         .map((order) => {
-                          const lastLog = order.server_details?.provisioning_logs?.[order.server_details.provisioning_logs.length - 1];
+                          const failedLogs = order.server_details?.provisioning_logs?.filter((log: any) => log.status === "failed") || [];
+                          const lastLog = failedLogs[failedLogs.length - 1];
                           return (
                             <TableRow key={order.id}>
                               <TableCell className="font-mono text-xs">{order.id.slice(0, 8)}</TableCell>
@@ -1916,18 +1902,21 @@ const AdminDashboard = () => {
               <DialogTitle>Provisioning Logs</DialogTitle>
             </DialogHeader>
             <div className="space-y-3">
-              {logOrder?.server_details?.provisioning_logs?.map((log: any, index: number) => (
-                <div key={`${log.at}-${index}`} className="border border-border rounded-lg p-3">
-                  <div className="flex items-center justify-between">
-                    <Badge className={statusColors[log.status] || ""}>{log.status}</Badge>
-                    <span className="text-xs text-muted-foreground">
-                      {log.at ? format(new Date(log.at), "PPpp") : "Unknown time"}
-                    </span>
+              {logOrder?.server_details?.provisioning_logs
+                ?.filter((log: any) => log.status === "failed")
+                .map((log: any, index: number) => (
+                  <div key={`${log.at}-${index}`} className="border border-border rounded-lg p-3">
+                    <div className="flex items-center justify-between">
+                      <Badge className={statusColors[log.status] || ""}>{log.status}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {log.at ? format(new Date(log.at), "PPpp") : "Unknown time"}
+                      </span>
+                    </div>
+                    <p className="text-sm mt-2">{log.message}</p>
                   </div>
-                  <p className="text-sm mt-2">{log.message}</p>
-                </div>
-              ))}
-              {(!logOrder?.server_details?.provisioning_logs || logOrder.server_details.provisioning_logs.length === 0) && (
+                ))}
+              {(!logOrder?.server_details?.provisioning_logs ||
+                logOrder.server_details.provisioning_logs.filter((log: any) => log.status === "failed").length === 0) && (
                 <p className="text-sm text-muted-foreground">No provisioning logs yet.</p>
               )}
             </div>

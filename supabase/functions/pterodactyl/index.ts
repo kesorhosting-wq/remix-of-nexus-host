@@ -836,9 +836,13 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
   const allocationsData = await allocationsResponse.json();
 
   // Find unassigned allocation
-  let availableAllocation = allocationsData.data?.find(
+  const unassignedAllocations = allocationsData.data?.filter(
     (a: any) => !a.attributes.assigned
-  );
+  ) || [];
+  let availableAllocation =
+    unassignedAllocations.length > 0
+      ? unassignedAllocations[Math.floor(Math.random() * unassignedAllocations.length)]
+      : null;
 
   // If no allocation available, try to create one
   if (!availableAllocation) {
@@ -852,11 +856,18 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
       nodeIp = allocationsData.data[0].attributes.ip;
     }
     
-    // Find a free port (start from 25565 for Minecraft, increment if taken)
+    // Find a free port (pick a random port in a safe range)
     const usedPorts = new Set(allocationsData.data?.map((a: any) => a.attributes.port) || []);
-    let newPort = 25565;
-    while (usedPorts.has(newPort) && newPort < 30000) {
-      newPort++;
+    const minPort = 20000;
+    const maxPort = 50000;
+    let newPort = Math.floor(Math.random() * (maxPort - minPort + 1)) + minPort;
+    let attempts = 0;
+    while (usedPorts.has(newPort) && attempts < 200) {
+      newPort = Math.floor(Math.random() * (maxPort - minPort + 1)) + minPort;
+      attempts++;
+    }
+    if (usedPorts.has(newPort)) {
+      throw new Error("No available ports found for allocation.");
     }
     
     // Create new allocation

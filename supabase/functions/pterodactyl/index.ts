@@ -562,8 +562,48 @@ async function createServer(
   // Priority: customer selection > plan config > default
   const eggId = firstItem.pterodactyl_egg_id || planConfig?.pterodactyl_egg_id || 1;
   const nestId = firstItem.pterodactyl_nest_id || planConfig?.pterodactyl_nest_id || 1;
-  const limits = planConfig?.pterodactyl_limits || { memory: 1024, swap: 0, disk: 10240, io: 500, cpu: 100 };
+  const defaultLimits = { memory: 1024, swap: 0, disk: 10240, io: 500, cpu: 100 };
+  const planLimits = planConfig?.pterodactyl_limits || null;
+  const limits = { ...defaultLimits, ...(planLimits || {}) };
+  const hasCustomLimits = !!planLimits && (
+    planLimits.memory !== defaultLimits.memory ||
+    planLimits.disk !== defaultLimits.disk ||
+    planLimits.cpu !== defaultLimits.cpu ||
+    planLimits.swap !== defaultLimits.swap ||
+    planLimits.io !== defaultLimits.io
+  );
   const featureLimits = planConfig?.pterodactyl_feature_limits || { databases: 1, backups: 2, allocations: 1 };
+
+  const parseSizeToMb = (value?: string | null) => {
+    if (!value) return null;
+    const normalized = value.toLowerCase().trim();
+    const numeric = Number(normalized.replace(/[^0-9.]/g, ""));
+    if (Number.isNaN(numeric) || numeric <= 0) return null;
+    if (normalized.includes("tb")) return Math.round(numeric * 1024 * 1024);
+    if (normalized.includes("gb") || normalized.includes("gib")) return Math.round(numeric * 1024);
+    if (normalized.includes("mb") || normalized.includes("mib")) return Math.round(numeric);
+    return Math.round(numeric);
+  };
+
+  const parseCpuPercent = (value?: string | null) => {
+    if (!value) return null;
+    const normalized = value.toLowerCase().trim();
+    const numeric = Number(normalized.replace(/[^0-9.]/g, ""));
+    if (Number.isNaN(numeric) || numeric <= 0) return null;
+    if (normalized.includes("%")) return Math.round(numeric);
+    if (normalized.includes("vcpu") || normalized.includes("core")) return Math.round(numeric * 100);
+    return Math.round(numeric);
+  };
+
+  if (!hasCustomLimits && planConfig) {
+    const memoryFromPlan = parseSizeToMb(planConfig.ram);
+    const diskFromPlan = parseSizeToMb(planConfig.storage);
+    const cpuFromPlan = parseCpuPercent(planConfig.cpu);
+
+    if (memoryFromPlan) limits.memory = memoryFromPlan;
+    if (diskFromPlan) limits.disk = diskFromPlan;
+    if (cpuFromPlan) limits.cpu = cpuFromPlan;
+  }
   
   // Fetch egg details to get docker_image and startup command for customer-selected egg
   let dockerImage = planConfig?.pterodactyl_docker_image || "ghcr.io/pterodactyl/yolks:java_17";

@@ -95,6 +95,7 @@ const PlanPterodactylEditor = ({ planId, planName, currentConfig, onSave }: Plan
   useEffect(() => {
     if (open) {
       fetchPanelData();
+      fetchPlanConfig();
     }
   }, [open]);
 
@@ -112,6 +113,53 @@ const PlanPterodactylEditor = ({ planId, planName, currentConfig, onSave }: Plan
     } catch (error: any) {
       console.error("Failed to fetch panel data:", error);
       toast({ title: "Failed to load panel data", description: "Make sure Pterodactyl is connected", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchPlanConfig = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("game_plans")
+        .select("*")
+        .eq("plan_id", planId)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (data) {
+        setSelectedNest(data.pterodactyl_nest_id || null);
+        setSelectedEgg(data.pterodactyl_egg_id || null);
+        setSelectedNode(data.pterodactyl_node_id || null);
+        setDockerImage(data.pterodactyl_docker_image || "");
+        setStartup(data.pterodactyl_startup || "");
+        setEnvVars(
+          data.pterodactyl_environment
+            ? Object.entries(data.pterodactyl_environment as Record<string, string>).map(([key, value]) => ({
+                key,
+                value,
+              }))
+            : []
+        );
+        setLimits({
+          memory: data.pterodactyl_limits?.memory ?? 1024,
+          swap: data.pterodactyl_limits?.swap ?? 0,
+          disk: data.pterodactyl_limits?.disk ?? 10240,
+          io: data.pterodactyl_limits?.io ?? 500,
+          cpu: data.pterodactyl_limits?.cpu ?? 100,
+        });
+        setFeatureLimits({
+          databases: data.pterodactyl_feature_limits?.databases ?? 1,
+          backups: data.pterodactyl_feature_limits?.backups ?? 2,
+          allocations: data.pterodactyl_feature_limits?.allocations ?? 1,
+        });
+        setBillingDays(data.billing_days || 30);
+      }
+    } catch (error: any) {
+      console.error("Failed to fetch plan config:", error);
+      toast({ title: "Failed to load plan config", description: error.message, variant: "destructive" });
     } finally {
       setLoading(false);
     }

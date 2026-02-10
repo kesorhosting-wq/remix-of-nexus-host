@@ -185,6 +185,26 @@ const Checkout = () => {
 
     try {
       const total = getTotal();
+      const parseSizeToMb = (value?: string) => {
+        if (!value) return null;
+        const normalized = value.toLowerCase().trim();
+        const numeric = Number(normalized.replace(/[^0-9.]/g, ""));
+        if (Number.isNaN(numeric) || numeric <= 0) return null;
+        if (normalized.includes("tb")) return Math.round(numeric * 1024 * 1024);
+        if (normalized.includes("gb") || normalized.includes("gib")) return Math.round(numeric * 1024);
+        if (normalized.includes("mb") || normalized.includes("mib")) return Math.round(numeric);
+        return Math.round(numeric);
+      };
+
+      const parseCpuPercent = (value?: string) => {
+        if (!value) return null;
+        const normalized = value.toLowerCase().trim();
+        const numeric = Number(normalized.replace(/[^0-9.]/g, ""));
+        if (Number.isNaN(numeric) || numeric <= 0) return null;
+        if (normalized.includes("%")) return Math.round(numeric);
+        if (normalized.includes("vcpu") || normalized.includes("core")) return Math.round(numeric * 100);
+        return Math.round(numeric);
+      };
       
       // Create a combined order for all items
       const { data: order, error: orderError } = await supabase
@@ -202,9 +222,9 @@ const Checkout = () => {
                 game_id: item.gameId,
                 plan_id: item.planId,
                 plan_name: item.planName,
-                ram: item.ram,
-                cpu: item.cpu,
-                storage: item.storage,
+                ram: parseSizeToMb(item.ram),
+                cpu: parseCpuPercent(item.cpu),
+                storage: parseSizeToMb(item.storage),
                 pterodactyl_nest_id: config?.nestId,
                 pterodactyl_egg_id: config?.eggId,
                 quantity: item.quantity,

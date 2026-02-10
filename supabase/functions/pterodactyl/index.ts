@@ -562,6 +562,7 @@ async function createServer(
   // Priority: customer selection > plan config > default
   const eggId = firstItem.pterodactyl_egg_id || planConfig?.pterodactyl_egg_id || 1;
   const nestId = firstItem.pterodactyl_nest_id || planConfig?.pterodactyl_nest_id || 1;
+  const nodeId = firstItem.pterodactyl_node_id || planConfig?.pterodactyl_node_id;
   const defaultLimits = { memory: 1024, swap: 0, disk: 10240, io: 500, cpu: 100 };
   const planLimits = planConfig?.pterodactyl_limits || null;
   const limits = { ...defaultLimits, ...(planLimits || {}) };
@@ -572,7 +573,13 @@ async function createServer(
     planLimits.swap !== defaultLimits.swap ||
     planLimits.io !== defaultLimits.io
   );
-  const featureLimits = planConfig?.pterodactyl_feature_limits || { databases: 1, backups: 2, allocations: 1 };
+  const featureLimits = {
+    databases: 1,
+    backups: 2,
+    allocations: 1,
+    ...(planConfig?.pterodactyl_feature_limits || {}),
+    ...(firstItem.pterodactyl_feature_limits || {}),
+  };
 
   const parseSizeToMb = (value?: string | null) => {
     if (!value) return null;
@@ -614,9 +621,12 @@ async function createServer(
   if (cpuFromOrder) limits.cpu = cpuFromOrder;
   
   // Fetch egg details to get docker_image and startup command for customer-selected egg
-  let dockerImage = planConfig?.pterodactyl_docker_image || "ghcr.io/pterodactyl/yolks:java_17";
-  let startup = planConfig?.pterodactyl_startup || "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}";
-  let environment = planConfig?.pterodactyl_environment || {};
+  let dockerImage = firstItem.pterodactyl_docker_image || planConfig?.pterodactyl_docker_image || "ghcr.io/pterodactyl/yolks:java_17";
+  let startup = firstItem.pterodactyl_startup || planConfig?.pterodactyl_startup || "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}";
+  let environment = {
+    ...(planConfig?.pterodactyl_environment || {}),
+    ...(firstItem.pterodactyl_environment || {}),
+  };
   
   // If customer selected a different egg, fetch its details
   if (firstItem.pterodactyl_egg_id) {
@@ -643,7 +653,7 @@ async function createServer(
   }
 
   // Find available allocation
-  const allocation = await findAvailableAllocation(apiUrl, headers, planConfig?.pterodactyl_node_id);
+  const allocation = await findAvailableAllocation(apiUrl, headers, nodeId);
 
   // Default environment variables for common Minecraft eggs
   const defaultEnvironment: Record<string, string> = {

@@ -616,9 +616,13 @@ async function createServer(
   const diskFromOrder = parseSizeToMb(firstItem.storage);
   const cpuFromOrder = parseCpuPercent(firstItem.cpu);
 
-  if (memoryFromOrder) limits.memory = memoryFromOrder;
-  if (diskFromOrder) limits.disk = diskFromOrder;
-  if (cpuFromOrder) limits.cpu = cpuFromOrder;
+  // Only fall back to order display values when custom plan limits are not configured.
+  // This ensures plan-level Pterodactyl limits (e.g. CPU 105%) are preserved exactly.
+  if (!hasCustomLimits) {
+    if (memoryFromOrder) limits.memory = memoryFromOrder;
+    if (diskFromOrder) limits.disk = diskFromOrder;
+    if (cpuFromOrder) limits.cpu = cpuFromOrder;
+  }
   
   // Fetch egg details to get docker_image and startup command for customer-selected egg
   let dockerImage = firstItem.pterodactyl_docker_image || planConfig?.pterodactyl_docker_image || "ghcr.io/pterodactyl/yolks:java_17";

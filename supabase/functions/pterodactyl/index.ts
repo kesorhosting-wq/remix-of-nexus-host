@@ -200,6 +200,12 @@ serve(async (req) => {
         const createPromise = createServer(config.apiUrl, apiHeaders, validatedOrderId, serverDetails, supabase)
           .catch(async (err) => {
             console.error("Background server creation failed:", err);
+
+            await appendProvisioningLog(supabase, validatedOrderId, {
+              status: "failed",
+              message: err.message || "Server creation failed",
+              response: { message: err.message || "Server creation failed" },
+            });
             
             // Update order status to failed
             await supabase.from("orders").update({ 
@@ -464,6 +470,12 @@ async function createServer(
 ) {
   console.log("Creating server for order:", orderId, serverDetails);
 
+  await appendProvisioningLog(supabase, orderId, {
+    status: "started",
+    message: "Server provisioning started.",
+    request: serverDetails,
+  });
+
   // Get order details
   const { data: order, error: orderError } = await supabase
     .from("orders")
@@ -706,6 +718,12 @@ async function createServer(
 
   console.log("Server created successfully:", serverId);
 
+  await appendProvisioningLog(supabase, orderId, {
+    status: "success",
+    message: "Server provisioning completed.",
+    response: { serverId, pterodactylId: serverData.attributes.id },
+  });
+
   // Get billing_days from plan for next_due_date calculation
   const billingDays = planConfig?.billing_days || 30;
   const nextDueDate = new Date();
@@ -789,6 +807,41 @@ async function createServer(
     },
     nextDueDate: nextDueDate.toISOString(),
   };
+}
+
+async function appendProvisioningLog(
+  supabase: any,
+  orderId: string,
+  entry: { status: "started" | "success" | "failed"; message: string; request?: any; response?: any }
+) {
+  try {
+    const { data: order } = await supabase
+      .from("orders")
+      .select("server_details")
+      .eq("id", orderId)
+      .single();
+
+    const details = order?.server_details || {};
+    const logs = details.provisioning_logs || [];
+
+    const updatedDetails = {
+      ...details,
+      provisioning_logs: [
+        ...logs,
+        {
+          ...entry,
+          at: new Date().toISOString(),
+        },
+      ],
+    };
+
+    await supabase
+      .from("orders")
+      .update({ server_details: updatedDetails })
+      .eq("id", orderId);
+  } catch (error) {
+    console.error("Failed to append provisioning log in edge function:", error);
+  }
 }
 
 async function getOrCreateUser(apiUrl: string, headers: Record<string, string>, email: string) {

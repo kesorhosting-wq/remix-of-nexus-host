@@ -122,6 +122,8 @@ const statusColors: Record<string, string> = {
   sent: "bg-green-500/20 text-green-500",
   failed: "bg-red-500/20 text-red-500",
   simulated: "bg-blue-500/20 text-blue-500",
+  started: "bg-blue-500/20 text-blue-500",
+  provisioning: "bg-blue-500/20 text-blue-500",
 };
 
 const AdminDashboard = () => {
@@ -305,7 +307,7 @@ const AdminDashboard = () => {
 
   const appendProvisionLog = async (
     order: Order,
-    entry: { status: "success" | "failed"; message: string; request?: any; response?: any }
+    entry: { status: "started" | "success" | "failed"; message: string; request?: any; response?: any }
   ) => {
     try {
       const safeEntry = {
@@ -408,13 +410,13 @@ const AdminDashboard = () => {
       if (error) throw error;
 
       await appendProvisionLog(order, {
-        status: "success",
-        message: "Server provisioned successfully.",
+        status: data?.status === "provisioning" ? "started" : "success",
+        message: data?.message || "Server provisioning completed.",
         request: requestPayload,
         response: data,
       });
 
-      toast({ title: "Server provisioned successfully!" });
+      toast({ title: data?.status === "provisioning" ? "Server provisioning started" : "Server provisioned successfully!" });
       fetchData();
     } catch (error: any) {
       console.error("Provisioning error:", error);
@@ -791,12 +793,12 @@ const AdminDashboard = () => {
                 toast({ title: "Server provisioning started", description: "Check order status for updates" });
               } else {
                 await appendProvisionLog(order, {
-                  status: "success",
-                  message: "Server provisioned successfully.",
+                  status: data?.status === "provisioning" ? "started" : "success",
+                  message: data?.message || "Server provisioning completed.",
                   request: requestPayload,
                   response: data,
                 });
-                toast({ title: "Server provisioned successfully!" });
+                toast({ title: data?.status === "provisioning" ? "Server provisioning started" : "Server provisioned successfully!" });
               }
               
               // Send payment confirmation email

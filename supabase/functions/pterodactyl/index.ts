@@ -977,17 +977,41 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
       throw new Error("No available allocations and failed to create new one. Please add allocations in Pterodactyl panel.");
     }
     
-    const createdAllocationData = await createAllocationResponse.json();
+    let createdAllocationData: any = null;
+    try {
+      createdAllocationData = await createAllocationResponse.json();
+    } catch {
+      // Some panel versions may return empty/no-json body on allocation create.
+      createdAllocationData = null;
+    }
+
     const createdAttributes =
       createdAllocationData?.attributes ||
       createdAllocationData?.data?.[0]?.attributes ||
       null;
-    availableAllocation = createdAttributes
-      ? { attributes: createdAttributes }
-      : null;
+
+    availableAllocation = createdAttributes ? { attributes: createdAttributes } : null;
 
     if (!availableAllocation) {
-      throw new Error("Allocation created but panel did not return allocation details");
+      // Fallback: refetch allocations and find the newly created unassigned port.
+      let fallbackFound: any = null;
+      for (let retry = 0; retry < 3 && !fallbackFound; retry++) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (retry + 1)));
+        const retryAllocationsResponse = await fetch(
+          `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations?per_page=1000`,
+          { headers }
+        );
+        const retryAllocationsData = await retryAllocationsResponse.json();
+        fallbackFound = retryAllocationsData?.data?.find(
+          (a: any) => !a.attributes.assigned && a.attributes.port === newPort
+        );
+      }
+
+      if (fallbackFound) {
+        availableAllocation = fallbackFound;
+      } else {
+        throw new Error("Failed to find newly created allocation");
+      }
     }
 
     console.log("Created new allocation:", availableAllocation.attributes);

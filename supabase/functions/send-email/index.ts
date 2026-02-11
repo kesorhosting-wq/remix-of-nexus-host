@@ -1752,7 +1752,7 @@ function generateProvisioningFailedEmail(order: any, userEmail: string, errorMes
         <div style="background: #2d2d2d; padding: 40px; border-radius: 0 0 16px 16px;">
           
           <p style="color: #e5e7eb; font-size: 16px; line-height: 1.6;">
-            A server provisioning attempt has failed and requires manual investigation.
+            Server provisioning failed. Please review the details below.
           </p>
           
           <!-- Error Box -->

@@ -1010,7 +1010,7 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
       if (fallbackFound) {
         availableAllocation = fallbackFound;
       } else {
-        throw new Error("Failed to find newly created allocation");
+        throw new Error("Failed to select an available allocation on the node");
       }
     }
 

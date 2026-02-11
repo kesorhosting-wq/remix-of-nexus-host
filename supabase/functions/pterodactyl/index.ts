@@ -586,16 +586,22 @@ async function createServer(
     planLimits.swap !== defaultLimits.swap ||
     planLimits.io !== defaultLimits.io
   );
-  const featureLimits = {
+  const rawFeatureLimits = {
     databases: 1,
     backups: 2,
     allocations: 1,
     ...(planConfig?.pterodactyl_feature_limits || {}),
     ...(firstItem.pterodactyl_feature_limits || {}),
+  } as any;
+  const featureLimits = {
+    databases: Number(rawFeatureLimits.databases ?? 1),
+    backups: Number(rawFeatureLimits.backups ?? 2),
+    allocations: Number(rawFeatureLimits.allocations ?? 1),
   };
 
-  const parseSizeToMb = (value?: string | null) => {
-    if (!value) return null;
+  const parseSizeToMb = (value?: string | number | null) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number") return value > 0 ? Math.round(value) : null;
     const normalized = value.toLowerCase().trim();
     const numeric = Number(normalized.replace(/[^0-9.]/g, ""));
     if (Number.isNaN(numeric) || numeric <= 0) return null;
@@ -605,8 +611,9 @@ async function createServer(
     return Math.round(numeric);
   };
 
-  const parseCpuPercent = (value?: string | null) => {
-    if (!value) return null;
+  const parseCpuPercent = (value?: string | number | null) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number") return value >= 0 ? Math.round(value) : null;
     const normalized = value.toLowerCase().trim();
     const numeric = Number(normalized.replace(/[^0-9.]/g, ""));
     if (Number.isNaN(numeric) || numeric <= 0) return null;

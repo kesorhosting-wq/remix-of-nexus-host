@@ -1925,9 +1925,12 @@ const AdminDashboard = () => {
                               {log.status}
                             </Badge>
                             {log.error_message && (
-                              <p className="text-xs text-red-500 mt-1 truncate max-w-[150px]" title={log.error_message}>
-                                {log.error_message}
-                              </p>
+                              <details className="mt-1">
+                                <summary className="text-xs text-red-500 cursor-pointer">View error details</summary>
+                                <pre className="text-xs text-red-500 mt-2 whitespace-pre-wrap break-all bg-red-500/5 border border-red-500/20 rounded p-2 max-w-[380px]">
+                                  {log.error_message}
+                                </pre>
+                              </details>
                             )}
                           </TableCell>
                         </TableRow>

@@ -22,6 +22,7 @@ interface PterodactylFeatureLimits {
   databases: number;
   backups: number;
   allocations: number;
+  port_range?: string;
 }
 
 interface EnvVar {
@@ -91,6 +92,7 @@ const PlanPterodactylEditor = ({ planId, planName, currentConfig, onSave }: Plan
     currentConfig?.feature_limits || { databases: 1, backups: 2, allocations: 1 }
   );
   const [billingDays, setBillingDays] = useState(currentConfig?.billing_days || 30);
+  const [portRange, setPortRange] = useState(currentConfig?.feature_limits?.port_range || "");
 
   useEffect(() => {
     if (open) {
@@ -155,6 +157,7 @@ const PlanPterodactylEditor = ({ planId, planName, currentConfig, onSave }: Plan
           backups: data.pterodactyl_feature_limits?.backups ?? 2,
           allocations: data.pterodactyl_feature_limits?.allocations ?? 1,
         });
+        setPortRange(data.pterodactyl_feature_limits?.port_range || "");
         setBillingDays(data.billing_days || 30);
       }
     } catch (error: any) {
@@ -223,7 +226,7 @@ const PlanPterodactylEditor = ({ planId, planName, currentConfig, onSave }: Plan
           pterodactyl_startup: startup,
           pterodactyl_environment: environment as any,
           pterodactyl_limits: limits as any,
-          pterodactyl_feature_limits: featureLimits as any,
+          pterodactyl_feature_limits: { ...featureLimits, port_range: portRange || null } as any,
           billing_days: billingDays,
         })
         .eq("plan_id", planId);
@@ -317,6 +320,16 @@ const PlanPterodactylEditor = ({ planId, planName, currentConfig, onSave }: Plan
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Port Range (Optional)</Label>
+              <Input
+                placeholder="25565-25650"
+                value={portRange}
+                onChange={(e) => setPortRange(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">Used for allocation selection in Pterodactyl (format: start-end)</p>
             </div>
 
             {/* Billing Days */}

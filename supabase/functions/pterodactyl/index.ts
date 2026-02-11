@@ -575,6 +575,7 @@ async function createServer(
   const eggId = firstItem.pterodactyl_egg_id || planConfig?.pterodactyl_egg_id || 1;
   const nestId = firstItem.pterodactyl_nest_id || planConfig?.pterodactyl_nest_id || 1;
   const nodeId = firstItem.pterodactyl_node_id || planConfig?.pterodactyl_node_id;
+  const portRange = firstItem.pterodactyl_port_range || planConfig?.pterodactyl_port_range || planConfig?.pterodactyl_feature_limits?.port_range;
   const defaultLimits = { memory: 1024, swap: 0, disk: 10240, io: 500, cpu: 100 };
   const planLimits = planConfig?.pterodactyl_limits || null;
   const limits = { ...defaultLimits, ...(planLimits || {}) };
@@ -669,7 +670,7 @@ async function createServer(
   }
 
   // Find available allocation
-  const allocation = await findAvailableAllocation(apiUrl, headers, nodeId);
+  const allocation = await findAvailableAllocation(apiUrl, headers, nodeId, portRange);
 
   // Default environment variables for common Minecraft eggs
   const defaultEnvironment: Record<string, string> = {
@@ -891,7 +892,7 @@ async function getOrCreateUser(apiUrl: string, headers: Record<string, string>, 
   return { id: userData.attributes.id, username, password, isExisting: false };
 }
 
-async function findAvailableAllocation(apiUrl: string, headers: Record<string, string>, nodeId?: number) {
+async function findAvailableAllocation(apiUrl: string, headers: Record<string, string>, nodeId?: number, portRange?: string) {
   // Get nodes
   const nodesResponse = await fetch(`${apiUrl}/api/application/nodes`, { headers });
   const nodesData = await nodesResponse.json();
@@ -905,14 +906,26 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
   const selectedNode = nodesData.data.find((n: any) => n.attributes.id === selectedNodeId) || nodesData.data[0];
   
   const allocationsResponse = await fetch(
-    `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
+    `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations?per_page=1000`,
     { headers }
   );
   const allocationsData = await allocationsResponse.json();
 
+  const parsePortRange = (range?: string) => {
+    if (!range) return null;
+    const match = range.trim().match(/^(\d+)\s*-\s*(\d+)$/);
+    if (!match) return null;
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end <= 0) return null;
+    return { start: Math.min(start, end), end: Math.max(start, end) };
+  };
+
+  const portFilter = parsePortRange(portRange);
+
   // Find unassigned allocation
   const unassignedAllocations = allocationsData.data?.filter(
-    (a: any) => !a.attributes.assigned
+    (a: any) => !a.attributes.assigned && (!portFilter || (a.attributes.port >= portFilter.start && a.attributes.port <= portFilter.end))
   ) || [];
   let availableAllocation =
     unassignedAllocations.length > 0
@@ -931,10 +944,10 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
       nodeIp = allocationsData.data[0].attributes.ip;
     }
     
-    // Find a free port (pick a random port in a safe range)
+    // Find a free port (pick a random port in configured range or safe default range)
     const usedPorts = new Set(allocationsData.data?.map((a: any) => a.attributes.port) || []);
-    const minPort = 20000;
-    const maxPort = 50000;
+    const minPort = portFilter?.start ?? 20000;
+    const maxPort = portFilter?.end ?? 50000;
     let newPort = Math.floor(Math.random() * (maxPort - minPort + 1)) + minPort;
     let attempts = 0;
     while (usedPorts.has(newPort) && attempts < 200) {
@@ -964,21 +977,19 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
       throw new Error("No available allocations and failed to create new one. Please add allocations in Pterodactyl panel.");
     }
     
-    // Fetch allocations again to get the new one
-    const newAllocationsResponse = await fetch(
-      `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
-      { headers }
-    );
-    const newAllocationsData = await newAllocationsResponse.json();
-    
-    availableAllocation = newAllocationsData.data?.find(
-      (a: any) => !a.attributes.assigned && a.attributes.port === newPort
-    );
-    
+    const createdAllocationData = await createAllocationResponse.json();
+    const createdAttributes =
+      createdAllocationData?.attributes ||
+      createdAllocationData?.data?.[0]?.attributes ||
+      null;
+    availableAllocation = createdAttributes
+      ? { attributes: createdAttributes }
+      : null;
+
     if (!availableAllocation) {
-      throw new Error("Failed to find newly created allocation");
+      throw new Error("Allocation created but panel did not return allocation details");
     }
-    
+
     console.log("Created new allocation:", availableAllocation.attributes);
   }
 

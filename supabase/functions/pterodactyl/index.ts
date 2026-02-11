@@ -904,12 +904,27 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
   // Use specified node or first available
   const selectedNodeId = nodeId || nodesData.data[0].attributes.id;
   const selectedNode = nodesData.data.find((n: any) => n.attributes.id === selectedNodeId) || nodesData.data[0];
-  
-  const allocationsResponse = await fetch(
-    `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations?per_page=1000`,
-    { headers }
-  );
-  const allocationsData = await allocationsResponse.json();
+
+  const fetchNodeAllocations = async () => {
+    const firstRes = await fetch(
+      `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations?per_page=1000&page=1`,
+      { headers }
+    );
+    const firstData = await firstRes.json();
+    const all = [...(firstData?.data || [])];
+    const totalPages = Number(firstData?.meta?.pagination?.total_pages || 1);
+
+    for (let page = 2; page <= totalPages; page++) {
+      const res = await fetch(
+        `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations?per_page=1000&page=${page}`,
+        { headers }
+      );
+      const data = await res.json();
+      if (data?.data?.length) all.push(...data.data);
+    }
+
+    return all;
+  };
 
   const parsePortRange = (range?: string) => {
     if (!range) return null;
@@ -922,11 +937,12 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
   };
 
   const portFilter = parsePortRange(portRange);
+  const allAllocations = await fetchNodeAllocations();
 
   // Find unassigned allocation
-  const unassignedAllocations = allocationsData.data?.filter(
+  const unassignedAllocations = allAllocations.filter(
     (a: any) => !a.attributes.assigned && (!portFilter || (a.attributes.port >= portFilter.start && a.attributes.port <= portFilter.end))
-  ) || [];
+  );
   let availableAllocation =
     unassignedAllocations.length > 0
       ? unassignedAllocations[Math.floor(Math.random() * unassignedAllocations.length)]
@@ -935,29 +951,34 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
   // If no allocation available, try to create one
   if (!availableAllocation) {
     console.log("No available allocations, attempting to create one...");
-    
-    // Get node's IP address from its FQDN or existing allocations
-    let nodeIp = selectedNode.attributes.fqdn || "0.0.0.0";
-    
-    // Try to get an existing IP from allocations
-    if (allocationsData.data && allocationsData.data.length > 0) {
-      nodeIp = allocationsData.data[0].attributes.ip;
+
+    // Determine a valid node IP from existing allocations (preferred) or node fqdn when fqdn is IP
+    let nodeIp = allAllocations[0]?.attributes?.ip;
+    if (!nodeIp) {
+      const fqdn = selectedNode.attributes.fqdn || "";
+      if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(fqdn)) {
+        nodeIp = fqdn;
+      }
     }
-    
+
+    if (!nodeIp) {
+      throw new Error("No allocation IP found on selected node. Please add at least one allocation IP in Pterodactyl first.");
+    }
+
     // Find a free port (pick a random port in configured range or safe default range)
-    const usedPorts = new Set(allocationsData.data?.map((a: any) => a.attributes.port) || []);
+    const usedPorts = new Set(allAllocations.map((a: any) => a.attributes.port));
     const minPort = portFilter?.start ?? 20000;
     const maxPort = portFilter?.end ?? 50000;
     let newPort = Math.floor(Math.random() * (maxPort - minPort + 1)) + minPort;
     let attempts = 0;
-    while (usedPorts.has(newPort) && attempts < 200) {
+    while (usedPorts.has(newPort) && attempts < 500) {
       newPort = Math.floor(Math.random() * (maxPort - minPort + 1)) + minPort;
       attempts++;
     }
     if (usedPorts.has(newPort)) {
       throw new Error("No available ports found for allocation.");
     }
-    
+
     // Create new allocation
     const createAllocationResponse = await fetch(
       `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
@@ -970,13 +991,13 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
         }),
       }
     );
-    
+
     if (!createAllocationResponse.ok) {
       const errorText = await createAllocationResponse.text();
       console.error("Failed to create allocation:", errorText);
       throw new Error("No available allocations and failed to create new one. Please add allocations in Pterodactyl panel.");
     }
-    
+
     let createdAllocationData: any = null;
     try {
       createdAllocationData = await createAllocationResponse.json();
@@ -995,14 +1016,10 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
     if (!availableAllocation) {
       // Fallback: refetch allocations and find the newly created unassigned port.
       let fallbackFound: any = null;
-      for (let retry = 0; retry < 3 && !fallbackFound; retry++) {
-        await new Promise((resolve) => setTimeout(resolve, 250 * (retry + 1)));
-        const retryAllocationsResponse = await fetch(
-          `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations?per_page=1000`,
-          { headers }
-        );
-        const retryAllocationsData = await retryAllocationsResponse.json();
-        fallbackFound = retryAllocationsData?.data?.find(
+      for (let retry = 0; retry < 5 && !fallbackFound; retry++) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * (retry + 1)));
+        const retryAllocations = await fetchNodeAllocations();
+        fallbackFound = retryAllocations.find(
           (a: any) => !a.attributes.assigned && a.attributes.port === newPort
         );
       }
@@ -1023,6 +1040,7 @@ async function findAvailableAllocation(apiUrl: string, headers: Record<string, s
     port: availableAllocation.attributes.port,
   };
 }
+
 
 async function sendPowerSignal(apiUrl: string, apiKey: string, serverId: string, signal: string) {
   console.log(`Sending power signal '${signal}' to server ${serverId}`);

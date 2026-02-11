@@ -6,63 +6,75 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-// Use environment variables for Pterodactyl credentials (more secure than database storage)
 const PTERODACTYL_API_URL = Deno.env.get("PTERODACTYL_API_URL");
 const PTERODACTYL_API_KEY = Deno.env.get("PTERODACTYL_API_KEY");
 
 function getPterodactylConfig() {
   if (!PTERODACTYL_API_URL || !PTERODACTYL_API_KEY) {
-    throw new Error("Pterodactyl panel not configured. Please set PTERODACTYL_API_URL and PTERODACTYL_API_KEY secrets.");
+    throw new Error("Pterodactyl panel not configured. Set PTERODACTYL_API_URL and PTERODACTYL_API_KEY.");
   }
-  
-  // Normalize URL: remove trailing slash and ensure no /api path is included
+
   let normalizedUrl = PTERODACTYL_API_URL.trim();
-  // Remove trailing slashes
-  while (normalizedUrl.endsWith('/')) {
-    normalizedUrl = normalizedUrl.slice(0, -1);
-  }
-  // Remove /api or /api/application if accidentally included
-  if (normalizedUrl.endsWith('/api/application')) {
-    normalizedUrl = normalizedUrl.replace(/\/api\/application$/, '');
-  } else if (normalizedUrl.endsWith('/api')) {
-    normalizedUrl = normalizedUrl.replace(/\/api$/, '');
-  }
-  
-  console.log(`Pterodactyl API URL (normalized): ${normalizedUrl}`);
-  
+  while (normalizedUrl.endsWith("/")) normalizedUrl = normalizedUrl.slice(0, -1);
+  normalizedUrl = normalizedUrl.replace(/\/api\/application$/i, "").replace(/\/api$/i, "");
+
   return { apiUrl: normalizedUrl, apiKey: PTERODACTYL_API_KEY };
 }
 
-serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+function json(resBody: unknown, status = 200) {
+  return new Response(JSON.stringify(resBody), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+/**
+ * Fetch helper that returns JSON when possible, otherwise text,
+ * and throws with the REAL response body if !ok.
+ */
+async function apiFetch(url: string, init: RequestInit) {
+  const res = await fetch(url, init);
+  const text = await res.text();
+
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
   }
 
-  const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+  if (!res.ok) {
+    const msg =
+      typeof data === "string"
+        ? data
+        : (data?.errors ? JSON.stringify(data.errors) : JSON.stringify(data));
+    throw new Error(`Pterodactyl API ${res.status} ${res.statusText}: ${msg}`);
+  }
+
+  return data;
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   try {
     const body = await req.json();
     const { action, orderId, serverDetails, serverId, apiUrl: testApiUrl, apiKey: testApiKey } = body;
 
-    console.log(`Pterodactyl action: ${action}`);
+    if (action === "test") return await handleTestConnection(testApiUrl, testApiKey);
 
-    // For test action, use provided credentials (admin testing before saving)
-    if (action === "test") {
-      return await handleTestConnection(testApiUrl, testApiKey, corsHeaders);
-    }
-
-    // For get-panel-data, use secure config
     if (action === "get-panel-data") {
       const config = getPterodactylConfig();
-      return await handleGetPanelData(config.apiUrl, config.apiKey, corsHeaders);
+      return await handleGetPanelData(config.apiUrl, config.apiKey);
     }
 
-    // Get config from environment variables for all other actions
     const config = getPterodactylConfig();
-    const apiHeaders = {
+    const headers = {
       "Authorization": `Bearer ${config.apiKey}`,
       "Content-Type": "application/json",
       "Accept": "application/json",
@@ -70,179 +82,93 @@ serve(async (req) => {
 
     switch (action) {
       case "create": {
-        // Set status to provisioning immediately
-        await supabase.from("orders").update({ 
+        await supabase.from("orders").update({
           status: "provisioning",
-          notes: "Server provisioning in progress..."
+          notes: "Server provisioning in progress...",
         }).eq("id", orderId);
-        
-        // Use background task for server creation to avoid timeout
-        const createPromise = createServer(config.apiUrl, apiHeaders, orderId, serverDetails, supabase)
-          .catch(err => {
-            console.error("Background server creation failed:", err);
-            // Update order with error status
-            supabase.from("orders").update({ 
+
+        const createPromise = createServer(config.apiUrl, headers, orderId, serverDetails, supabase)
+          .catch(async (err: any) => {
+            console.error("Server creation failed:", err);
+            await supabase.from("orders").update({
               status: "failed",
-              notes: `Server creation failed: ${err.message}`
+              notes: `Server creation failed: ${err?.message ?? String(err)}`,
             }).eq("id", orderId);
+            throw err;
           });
-        
-        // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
+
+        // Supabase Edge runtime background
+        // @ts-ignore
         const runtime = (globalThis as any).EdgeRuntime;
         if (runtime?.waitUntil) {
           runtime.waitUntil(createPromise);
-          return new Response(JSON.stringify({ 
-            success: true, 
-            message: "Server provisioning started",
-            status: "provisioning"
-          }), {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
+          return json({ success: true, message: "Server provisioning started", status: "provisioning" });
         }
-        
-        // Fallback for environments without EdgeRuntime
+
         const result = await createPromise;
-        return new Response(JSON.stringify(result), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      case "power": {
-        // Handle power actions (start, stop, restart, kill)
-        const { signal } = body;
-        const result = await sendPowerSignal(config.apiUrl, config.apiKey, serverId, signal);
-        return new Response(JSON.stringify(result), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      case "suspend": {
-        const result = await suspendServer(config.apiUrl, apiHeaders, serverId);
-        await supabase.from("orders").update({ status: "suspended" }).eq("server_id", serverId);
-        return new Response(JSON.stringify(result), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      case "unsuspend": {
-        const result = await unsuspendServer(config.apiUrl, apiHeaders, serverId);
-        await supabase.from("orders").update({ status: "active" }).eq("server_id", serverId);
-        return new Response(JSON.stringify(result), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      case "terminate": {
-        const result = await terminateServer(config.apiUrl, apiHeaders, serverId);
-        await supabase.from("orders").update({ status: "terminated", server_id: null }).eq("server_id", serverId);
-        return new Response(JSON.stringify(result), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      case "status": {
-        const result = await getServerStatus(config.apiUrl, apiHeaders, serverId);
-        return new Response(JSON.stringify(result), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return json(result);
       }
 
       default:
-        throw new Error(`Unknown action: ${action}`);
+        return json({ error: `Unknown action: ${action}` }, 400);
     }
   } catch (error: any) {
-    console.error("Pterodactyl API error:", error);
-    return new Response(
-      JSON.stringify({ error: error.message }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
-    );
+    console.error("Edge function error:", error);
+    return json({ error: error?.message ?? String(error) }, 500);
   }
 });
 
-async function handleTestConnection(apiUrl: string, apiKey: string, corsHeaders: any) {
-  try {
-    const headers = {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "Accept": "application/json",
-    };
-
-    const [nodesRes, serversRes] = await Promise.all([
-      fetch(`${apiUrl}/api/application/nodes`, { headers }),
-      fetch(`${apiUrl}/api/application/servers`, { headers }),
-    ]);
-
-    if (!nodesRes.ok || !serversRes.ok) {
-      throw new Error("Failed to connect to panel");
-    }
-
-    const nodesData = await nodesRes.json();
-    const serversData = await serversRes.json();
-
-    return new Response(JSON.stringify({
-      success: true,
-      nodes: nodesData.meta?.pagination?.total || nodesData.data?.length || 0,
-      servers: serversData.meta?.pagination?.total || serversData.data?.length || 0,
-    }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-}
-
-async function handleGetPanelData(apiUrl: string, apiKey: string, corsHeaders: any) {
+async function handleTestConnection(apiUrl: string, apiKey: string) {
   const headers = {
     "Authorization": `Bearer ${apiKey}`,
     "Content-Type": "application/json",
     "Accept": "application/json",
   };
 
-  try {
-    // Fetch nests with eggs
-    const nestsRes = await fetch(`${apiUrl}/api/application/nests?include=eggs`, { headers });
-    const nodesRes = await fetch(`${apiUrl}/api/application/nodes`, { headers });
+  const [nodesData, serversData] = await Promise.all([
+    apiFetch(`${apiUrl}/api/application/nodes`, { headers }),
+    apiFetch(`${apiUrl}/api/application/servers`, { headers }),
+  ]);
 
-    if (!nestsRes.ok || !nodesRes.ok) {
-      throw new Error("Failed to fetch panel data");
-    }
+  return json({
+    success: true,
+    nodes: nodesData.meta?.pagination?.total ?? nodesData.data?.length ?? 0,
+    servers: serversData.meta?.pagination?.total ?? serversData.data?.length ?? 0,
+  });
+}
 
-    const nestsData = await nestsRes.json();
-    const nodesData = await nodesRes.json();
+async function handleGetPanelData(apiUrl: string, apiKey: string) {
+  const headers = {
+    "Authorization": `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  };
 
-    const nests = nestsData.data?.map((nest: any) => ({
-      id: nest.attributes.id,
-      name: nest.attributes.name,
-      eggs: nest.attributes.relationships?.eggs?.data?.map((egg: any) => ({
-        id: egg.attributes.id,
-        name: egg.attributes.name,
-        docker_image: egg.attributes.docker_image,
-        startup: egg.attributes.startup,
-      })) || [],
-    })) || [];
+  const [nestsData, nodesData] = await Promise.all([
+    apiFetch(`${apiUrl}/api/application/nests?include=eggs`, { headers }),
+    apiFetch(`${apiUrl}/api/application/nodes`, { headers }),
+  ]);
 
-    const nodes = nodesData.data?.map((node: any) => ({
-      id: node.attributes.id,
-      name: node.attributes.name,
-      memory: node.attributes.memory,
-      disk: node.attributes.disk,
-    })) || [];
+  const nests = nestsData.data?.map((nest: any) => ({
+    id: nest.attributes.id,
+    name: nest.attributes.name,
+    eggs: nest.attributes.relationships?.eggs?.data?.map((egg: any) => ({
+      id: egg.attributes.id,
+      name: egg.attributes.name,
+      docker_image: egg.attributes.docker_image,
+      startup: egg.attributes.startup,
+    })) ?? [],
+  })) ?? [];
 
-    return new Response(JSON.stringify({ nests, nodes }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  const nodes = nodesData.data?.map((node: any) => ({
+    id: node.attributes.id,
+    name: node.attributes.name,
+    memory: node.attributes.memory,
+    disk: node.attributes.disk,
+    location_id: node.attributes.location_id,
+  })) ?? [];
+
+  return json({ nests, nodes });
 }
 
 async function createServer(
@@ -250,182 +176,165 @@ async function createServer(
   headers: Record<string, string>,
   orderId: string,
   serverDetails: any,
-  supabase: any
+  supabase: any,
 ) {
-  console.log("Creating server for order:", orderId, serverDetails);
+  console.log("Creating server for order:", orderId);
 
-  // Get order details
   const { data: order, error: orderError } = await supabase
-    .from("orders")
-    .select("*")
-    .eq("id", orderId)
-    .single();
+    .from("orders").select("*").eq("id", orderId).single();
 
-  if (orderError || !order) {
-    console.error("Order lookup error:", orderError, "orderId:", orderId);
-    throw new Error("Order not found");
-  }
+  if (orderError || !order) throw new Error("Order not found");
 
-  // Get user profile for email
   const { data: profile } = await supabase
-    .from("profiles")
-    .select("email")
-    .eq("user_id", order.user_id)
-    .single();
+    .from("profiles").select("email").eq("user_id", order.user_id).single();
 
-  // Handle cart format: server_details may have items array
   const orderDetails = order.server_details || serverDetails || {};
   const items = orderDetails.items || [orderDetails];
   const firstItem = items[0] || {};
 
-  // Get plan config with Pterodactyl settings
   const planId = firstItem.plan_id || serverDetails?.plan_id;
   const { data: planConfig } = await supabase
-    .from("game_plans")
-    .select("*")
-    .eq("plan_id", planId)
-    .maybeSingle();
+    .from("game_plans").select("*").eq("plan_id", planId).maybeSingle();
 
-  // Get or create Pterodactyl user - returns password if newly created
   const userEmail = profile?.email || `user-${order.user_id}@gamehost.com`;
-  const pterodactylUser = await getOrCreateUser(apiUrl, headers, userEmail);
-  
-  // Track if this is a new user (has password) for showing credentials
-  const isNewPanelUser = !!pterodactylUser.password;
-  const panelCredentials = isNewPanelUser ? {
-    email: userEmail,
-    username: pterodactylUser.username,
-    password: pterodactylUser.password,
-    isNew: true,
-  } : null;
+  const pUser = await getOrCreateUser(apiUrl, headers, userEmail);
 
-  // Use customer-selected nest/egg from order, or fall back to plan config, or defaults
-  const serverName = firstItem.server_name || firstItem.name || `Server-${orderId.slice(0, 8)}`;
-  // Priority: customer selection > plan config > default
-  const eggId = firstItem.pterodactyl_egg_id || planConfig?.pterodactyl_egg_id || 1;
-  const nestId = firstItem.pterodactyl_nest_id || planConfig?.pterodactyl_nest_id || 1;
-  const limits = planConfig?.pterodactyl_limits || { memory: 1024, swap: 0, disk: 10240, io: 500, cpu: 100 };
-  const featureLimits = planConfig?.pterodactyl_feature_limits || { databases: 1, backups: 2, allocations: 1 };
-  
-  // Fetch egg details to get docker_image and startup command for customer-selected egg
-  let dockerImage = planConfig?.pterodactyl_docker_image || "ghcr.io/pterodactyl/yolks:java_17";
-  let startup = planConfig?.pterodactyl_startup || "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}";
-  let environment = planConfig?.pterodactyl_environment || {};
-  
-  // If customer selected a different egg, fetch its details
-  if (firstItem.pterodactyl_egg_id) {
-    console.log(`Customer selected egg ${eggId} from nest ${nestId}, fetching egg details...`);
-    try {
-      const eggRes = await fetch(`${apiUrl}/api/application/nests/${nestId}/eggs/${eggId}?include=variables`, { headers });
-      if (eggRes.ok) {
-        const eggData = await eggRes.json();
-        dockerImage = eggData.attributes.docker_image || dockerImage;
-        startup = eggData.attributes.startup || startup;
-        
-        // Build environment from egg variables
-        const eggVars = eggData.attributes.relationships?.variables?.data || [];
-        const eggEnvironment: Record<string, string> = {};
-        for (const v of eggVars) {
-          eggEnvironment[v.attributes.env_variable] = v.attributes.default_value || "";
-        }
-        environment = { ...eggEnvironment, ...environment };
-        console.log(`Egg ${eggId} details loaded: docker=${dockerImage}`);
-      }
-    } catch (err) {
-      console.error("Failed to fetch egg details, using defaults:", err);
+  const serverName =
+    firstItem.server_name || firstItem.name || `Server-${orderId.slice(0, 8)}`;
+
+  const eggId = Number(firstItem.pterodactyl_egg_id || planConfig?.pterodactyl_egg_id || 1);
+  const nestId = Number(firstItem.pterodactyl_nest_id || planConfig?.pterodactyl_nest_id || 1);
+
+  const limits = planConfig?.pterodactyl_limits ?? { memory: 1024, swap: 0, disk: 10240, io: 500, cpu: 100 };
+  const featureLimits = planConfig?.pterodactyl_feature_limits ?? { databases: 1, backups: 2, allocations: 1 };
+
+  // 1) Load egg + variables (so we know EXACT required env vars)
+  const eggData = await apiFetch(
+    `${apiUrl}/api/application/nests/${nestId}/eggs/${eggId}?include=variables`,
+    { headers },
+  );
+
+  const dockerImage =
+    (firstItem.pterodactyl_docker_image || planConfig?.pterodactyl_docker_image || eggData?.attributes?.docker_image) ??
+    "ghcr.io/pterodactyl/yolks:java_17";
+
+  const startup =
+    (firstItem.pterodactyl_startup || planConfig?.pterodactyl_startup || eggData?.attributes?.startup) ??
+    "java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}}";
+
+  const eggVars = eggData?.attributes?.relationships?.variables?.data ?? [];
+
+  // Sources of env overrides (highest first)
+  const planEnv: Record<string, any> = planConfig?.pterodactyl_environment ?? {};
+  const itemEnv: Record<string, any> = firstItem.environment ?? {};
+  const passedEnv: Record<string, any> = serverDetails?.environment ?? {};
+
+  // 2) Build a VALID environment object: required vars MUST have value
+  const environment: Record<string, string> = {};
+  for (const v of eggVars) {
+    const envName = v.attributes.env_variable;
+    const rules: string = v.attributes.rules ?? "";
+    const isRequired = rules.split("|").includes("required");
+
+    const chosen =
+      (passedEnv[envName] ?? itemEnv[envName] ?? planEnv[envName] ?? v.attributes.default_value);
+
+    if (isRequired && (chosen === null || chosen === undefined || String(chosen).trim() === "")) {
+      throw new Error(
+        `Egg variable '${envName}' is required but has no value. Set it in planConfig.pterodactyl_environment or order item.environment.`,
+      );
     }
+
+    // Pterodactyl expects strings
+    environment[envName] = chosen === null || chosen === undefined ? "" : String(chosen);
   }
 
-  // Find available allocation
+  // 3) Allocation (preferred)
   const allocation = await findAvailableAllocation(apiUrl, headers, planConfig?.pterodactyl_node_id);
 
-  // Default environment variables for common Minecraft eggs
-  const defaultEnvironment: Record<string, string> = {
-    SERVER_JARFILE: "server.jar",
-    VANILLA_VERSION: "latest",
-    MC_VERSION: "latest",
-    BUILD_TYPE: "recommended",
-    BUILD_NUMBER: "latest",
-    MINECRAFT_VERSION: "latest",
-    VERSION: "latest",
-  };
+  // 4) Also include deploy fallback (safe & compatible with create schema) :contentReference[oaicite:1]{index=1}
+  const nodeData = await apiFetch(`${apiUrl}/api/application/nodes/${allocation.nodeId}`, { headers });
+  const locationId = nodeData?.attributes?.location_id;
 
-  const serverPayload = {
+  const payload: any = {
+    external_id: String(orderId), // optional but useful :contentReference[oaicite:2]{index=2}
     name: serverName,
-    user: pterodactylUser.id,
+    user: pUser.id,
     egg: eggId,
     docker_image: dockerImage,
-    startup: startup,
-    environment: {
-      ...defaultEnvironment,
-      ...environment,
-    },
-    limits: limits,
+    startup,
+    environment,
+    limits,
     feature_limits: featureLimits,
+
     allocation: {
       default: allocation.id,
+      additional: [],
     },
+
+    // fallback deploy info (doesn't hurt even if allocation is set)
+    ...(locationId ? {
+      deploy: {
+        locations: [locationId],
+        dedicated_ip: false,
+        port_range: [],
+      },
+    } : {}),
+
+    start_on_completion: true,
+    skip_scripts: false,
+    oom_disabled: true,
   };
 
-  console.log("Creating server with payload:", JSON.stringify(serverPayload));
+  console.log("Create server payload:", JSON.stringify(payload));
 
-  const response = await fetch(`${apiUrl}/api/application/servers`, {
+  const serverData = await apiFetch(`${apiUrl}/api/application/servers`, {
     method: "POST",
     headers,
-    body: JSON.stringify(serverPayload),
+    body: JSON.stringify(payload),
   });
 
-  if (!response.ok) {
-    const errorData = await response.text();
-    console.error("Pterodactyl API error:", errorData);
-    throw new Error(`Failed to create server: ${response.statusText}`);
-  }
+  const identifier = serverData.attributes.identifier;
 
-  const serverData = await response.json();
-  const serverId = serverData.attributes.identifier;
-
-  console.log("Server created successfully:", serverId);
-
-  // Get billing_days from plan for next_due_date calculation
-  const billingDays = planConfig?.billing_days || 30;
+  const billingDays = planConfig?.billing_days ?? 30;
   const nextDueDate = new Date();
   nextDueDate.setDate(nextDueDate.getDate() + billingDays);
 
-  // Update order with server ID, credentials (if new user), and next due date
   const updatedServerDetails: Record<string, any> = {
     ...serverDetails,
     pterodactyl_id: serverData.attributes.id,
     pterodactyl_uuid: serverData.attributes.uuid,
-    pterodactyl_identifier: serverId,
+    pterodactyl_identifier: identifier,
     ip: allocation.ip,
     port: allocation.port,
     billing_days: billingDays,
     panel_url: apiUrl,
   };
-  
-  // Store credentials only if this is a new panel user
-  if (panelCredentials) {
-    updatedServerDetails.panel_credentials = panelCredentials;
-    console.log("New panel user created, credentials stored for invoice display");
+
+  // Store panel creds only when new
+  if (pUser.password) {
+    updatedServerDetails.panel_credentials = {
+      email: userEmail,
+      username: pUser.username,
+      password: pUser.password,
+      isNew: true,
+    };
   }
 
-  await supabase
-    .from("orders")
-    .update({
-      server_id: serverId,
-      status: "active",
-      next_due_date: nextDueDate.toISOString(),
-      server_details: updatedServerDetails,
-    })
-    .eq("id", orderId);
+  await supabase.from("orders").update({
+    server_id: identifier,
+    status: "active",
+    next_due_date: nextDueDate.toISOString(),
+    server_details: updatedServerDetails,
+  }).eq("id", orderId);
 
   return {
     success: true,
-    serverId: serverId,
+    serverId: identifier,
     serverDetails: {
       id: serverData.attributes.id,
       uuid: serverData.attributes.uuid,
-      identifier: serverId,
+      identifier,
       name: serverData.attributes.name,
       ip: allocation.ip,
       port: allocation.port,
@@ -435,279 +344,102 @@ async function createServer(
 }
 
 async function getOrCreateUser(apiUrl: string, headers: Record<string, string>, email: string) {
-  // Search for existing user
-  const searchResponse = await fetch(
+  // Search existing
+  const searchData = await apiFetch(
     `${apiUrl}/api/application/users?filter[email]=${encodeURIComponent(email)}`,
-    { headers }
-  );
+    { headers },
+  ).catch(() => null);
 
-  if (searchResponse.ok) {
-    const searchData = await searchResponse.json();
-    if (searchData.data && searchData.data.length > 0) {
-      console.log("Found existing Pterodactyl user:", searchData.data[0].attributes.id);
-      return { 
-        id: searchData.data[0].attributes.id,
-        username: searchData.data[0].attributes.username,
-        isExisting: true,
-      };
-    }
+  if (searchData?.data?.length) {
+    const u = searchData.data[0].attributes;
+    return { id: u.id, username: u.username, isExisting: true };
   }
 
-  // Create new user
-  const username = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").substring(0, 20) + Math.floor(Math.random() * 100);
+  const base = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").slice(0, 18);
+  const username = `${base}${Math.floor(Math.random() * 100)}`;
   const password = generatePassword();
 
-  const createResponse = await fetch(`${apiUrl}/api/application/users`, {
+  const userData = await apiFetch(`${apiUrl}/api/application/users`, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      email: email,
-      username: username,
+      email,
+      username,
       first_name: username,
       last_name: "User",
-      password: password,
+      password,
     }),
   });
-
-  if (!createResponse.ok) {
-    const errorText = await createResponse.text();
-    console.error("Failed to create user:", errorText);
-    throw new Error("Failed to create Pterodactyl user");
-  }
-
-  const userData = await createResponse.json();
-  console.log("Created new Pterodactyl user:", userData.attributes.id, "username:", username);
 
   return { id: userData.attributes.id, username, password, isExisting: false };
 }
 
-async function findAvailableAllocation(apiUrl: string, headers: Record<string, string>, nodeId?: number) {
-  // Get nodes
-  const nodesResponse = await fetch(`${apiUrl}/api/application/nodes`, { headers });
-  const nodesData = await nodesResponse.json();
-
-  if (!nodesData.data || nodesData.data.length === 0) {
-    throw new Error("No nodes available");
-  }
-
-  // Use specified node or first available
-  const selectedNodeId = nodeId || nodesData.data[0].attributes.id;
-  const selectedNode = nodesData.data.find((n: any) => n.attributes.id === selectedNodeId) || nodesData.data[0];
-  
-  const allocationsResponse = await fetch(
-    `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
-    { headers }
-  );
-  const allocationsData = await allocationsResponse.json();
-
-  // Find unassigned allocation
-  let availableAllocation = allocationsData.data?.find(
-    (a: any) => !a.attributes.assigned
-  );
-
-  // If no allocation available, try to create one
-  if (!availableAllocation) {
-    console.log("No available allocations, attempting to create one...");
-    
-    // Get node's IP address from its FQDN or existing allocations
-    let nodeIp = selectedNode.attributes.fqdn || "0.0.0.0";
-    
-    // Try to get an existing IP from allocations
-    if (allocationsData.data && allocationsData.data.length > 0) {
-      nodeIp = allocationsData.data[0].attributes.ip;
-    }
-    
-    // Find a free port (start from 25565 for Minecraft, increment if taken)
-    const usedPorts = new Set(allocationsData.data?.map((a: any) => a.attributes.port) || []);
-    let newPort = 25565;
-    while (usedPorts.has(newPort) && newPort < 30000) {
-      newPort++;
-    }
-    
-    // Create new allocation
-    const createAllocationResponse = await fetch(
-      `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          ip: nodeIp,
-          ports: [newPort.toString()],
-        }),
-      }
-    );
-    
-    if (!createAllocationResponse.ok) {
-      const errorText = await createAllocationResponse.text();
-      console.error("Failed to create allocation:", errorText);
-      throw new Error("No available allocations and failed to create new one. Please add allocations in Pterodactyl panel.");
-    }
-    
-    // Fetch allocations again to get the new one
-    const newAllocationsResponse = await fetch(
-      `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
-      { headers }
-    );
-    const newAllocationsData = await newAllocationsResponse.json();
-    
-    availableAllocation = newAllocationsData.data?.find(
-      (a: any) => !a.attributes.assigned && a.attributes.port === newPort
-    );
-    
-    if (!availableAllocation) {
-      throw new Error("Failed to find newly created allocation");
-    }
-    
-    console.log("Created new allocation:", availableAllocation.attributes);
-  }
-
-  return {
-    id: availableAllocation.attributes.id,
-    ip: availableAllocation.attributes.ip,
-    port: availableAllocation.attributes.port,
-  };
+function isValidIPv4(ip: string) {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip);
 }
 
-async function sendPowerSignal(apiUrl: string, apiKey: string, serverId: string, signal: string) {
-  console.log(`Sending power signal '${signal}' to server ${serverId}`);
+async function findAvailableAllocation(apiUrl: string, headers: Record<string, string>, nodeId?: number) {
+  const nodesData = await apiFetch(`${apiUrl}/api/application/nodes`, { headers });
 
-  // First, get the internal server ID from the identifier
-  const headers = {
-    "Authorization": `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-  };
+  if (!nodesData.data?.length) throw new Error("No nodes available");
 
-  // Get server by external ID
-  const serverResponse = await fetch(
-    `${apiUrl}/api/application/servers/external/${serverId}`,
-    { headers }
+  const selectedNodeId = nodeId ?? nodesData.data[0].attributes.id;
+  const selectedNode = nodesData.data.find((n: any) => n.attributes.id === selectedNodeId) ?? nodesData.data[0];
+
+  const allocationsData = await apiFetch(
+    `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
+    { headers },
   );
 
-  if (!serverResponse.ok) {
-    throw new Error(`Server not found: ${serverId}`);
-  }
+  let available = allocationsData.data?.find((a: any) => !a.attributes.assigned);
 
-  const serverData = await serverResponse.json();
-  const internalId = serverData.attributes.id;
+  // If none, try to create ONE new allocation only if we can determine a real IP
+  if (!available) {
+    const existingIp = allocationsData.data?.[0]?.attributes?.ip;
+    const nodeIpCandidate = existingIp ?? selectedNode.attributes?.ip ?? selectedNode.attributes?.fqdn;
 
-  // Send power signal using client API
-  const powerResponse = await fetch(
-    `${apiUrl}/api/client/servers/${serverId}/power`,
-    {
+    if (!nodeIpCandidate || !isValidIPv4(String(nodeIpCandidate))) {
+      throw new Error(
+        "No free allocations and cannot auto-create (node IP unknown). Add allocations in Pterodactyl panel first.",
+      );
+    }
+
+    const usedPorts = new Set<number>(allocationsData.data?.map((a: any) => Number(a.attributes.port)) ?? []);
+    let newPort = 25565;
+    while (usedPorts.has(newPort) && newPort < 30000) newPort++;
+
+    await apiFetch(`${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ signal }),
+      body: JSON.stringify({
+        ip: String(nodeIpCandidate),
+        ports: [String(newPort)],
+      }),
+    });
+
+    const refreshed = await apiFetch(
+      `${apiUrl}/api/application/nodes/${selectedNodeId}/allocations`,
+      { headers },
+    );
+
+    available = refreshed.data?.find((a: any) => !a.attributes.assigned && Number(a.attributes.port) === newPort);
+
+    if (!available) {
+      throw new Error("Allocation creation succeeded but could not find the new free allocation.");
     }
-  );
-
-  if (!powerResponse.ok) {
-    const errorText = await powerResponse.text();
-    console.error("Power signal error:", errorText);
-    throw new Error(`Failed to send power signal: ${powerResponse.statusText}`);
   }
 
-  return { success: true, signal, serverId };
-}
-
-async function suspendServer(apiUrl: string, headers: Record<string, string>, serverId: string) {
-  const serverResponse = await fetch(
-    `${apiUrl}/api/application/servers/external/${serverId}`,
-    { headers }
-  );
-
-  if (!serverResponse.ok) {
-    throw new Error(`Server not found: ${serverId}`);
-  }
-
-  const serverData = await serverResponse.json();
-  const internalId = serverData.attributes.id;
-
-  const response = await fetch(
-    `${apiUrl}/api/application/servers/${internalId}/suspend`,
-    { method: "POST", headers }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to suspend server: ${response.statusText}`);
-  }
-
-  return { success: true, action: "suspended", serverId };
-}
-
-async function unsuspendServer(apiUrl: string, headers: Record<string, string>, serverId: string) {
-  const serverResponse = await fetch(
-    `${apiUrl}/api/application/servers/external/${serverId}`,
-    { headers }
-  );
-
-  if (!serverResponse.ok) {
-    throw new Error(`Server not found: ${serverId}`);
-  }
-
-  const serverData = await serverResponse.json();
-  const internalId = serverData.attributes.id;
-
-  const response = await fetch(
-    `${apiUrl}/api/application/servers/${internalId}/unsuspend`,
-    { method: "POST", headers }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to unsuspend server: ${response.statusText}`);
-  }
-
-  return { success: true, action: "unsuspended", serverId };
-}
-
-async function terminateServer(apiUrl: string, headers: Record<string, string>, serverId: string) {
-  const serverResponse = await fetch(
-    `${apiUrl}/api/application/servers/external/${serverId}`,
-    { headers }
-  );
-
-  if (!serverResponse.ok) {
-    throw new Error(`Server not found: ${serverId}`);
-  }
-
-  const serverData = await serverResponse.json();
-  const internalId = serverData.attributes.id;
-
-  const response = await fetch(
-    `${apiUrl}/api/application/servers/${internalId}`,
-    { method: "DELETE", headers }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to terminate server: ${response.statusText}`);
-  }
-
-  return { success: true, action: "terminated", serverId };
-}
-
-async function getServerStatus(apiUrl: string, headers: Record<string, string>, serverId: string) {
-  const serverResponse = await fetch(
-    `${apiUrl}/api/client/servers/${serverId}/resources`,
-    { headers }
-  );
-
-  if (!serverResponse.ok) {
-    throw new Error(`Failed to get server status: ${serverResponse.statusText}`);
-  }
-
-  const data = await serverResponse.json();
   return {
-    success: true,
-    status: data.attributes.current_state,
-    resources: data.attributes.resources,
+    id: available.attributes.id,
+    ip: available.attributes.ip,
+    port: available.attributes.port,
+    nodeId: selectedNodeId,
   };
 }
 
 function generatePassword(): string {
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
-  let password = "";
-  for (let i = 0; i < 16; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return password;
+  let pass = "";
+  for (let i = 0; i < 16; i++) pass += chars.charAt(Math.floor(Math.random() * chars.length));
+  return pass;
 }
